@@ -79,20 +79,62 @@ sudo mksquashfs "$CUSTOM_ROOT" "$EXTRACT_DIR/casper/filesystem.squashfs" $SQUASH
 sudo rm -rf "$CUSTOM_ROOT"
 
 # Сборка нового ISO
-log "Сборка нового ISO"
+log "Подготовка к сборке нового ISO"
+
+# Копируем содержимое extract в newiso
 sudo cp -r "$EXTRACT_DIR"/* "$NEW_ISO_DIR/"
-# Определяем путь к isohdpfx.bin
+
+# Проверяем наличие isolinux.bin и, если отсутствует, копируем его из системы
+if [ ! -f "$NEW_ISO_DIR/isolinux/isolinux.bin" ]; then
+    log "ВНИМАНИЕ: isolinux.bin не найден в newiso/isolinux. Пытаемся восстановить."
+
+    # Проверяем, есть ли isolinux в оригинальном extract
+    if [ -f "$EXTRACT_DIR/isolinux/isolinux.bin" ]; then
+        log "Копируем isolinux из extract в newiso"
+        sudo cp -r "$EXTRACT_DIR/isolinux" "$NEW_ISO_DIR/"
+    else
+        log "isolinux отсутствует в оригинальном ISO. Устанавливаем isolinux из репозитория."
+        sudo apt update
+        sudo apt install -y isolinux syslinux-common
+
+        # Создаём каталог и копируем необходимые файлы
+        sudo mkdir -p "$NEW_ISO_DIR/isolinux"
+        sudo cp /usr/lib/ISOLINUX/isolinux.bin "$NEW_ISO_DIR/isolinux/"
+        # Копируем модули syslinux (для корректной работы)
+        if [ -d /usr/lib/syslinux/modules/bios ]; then
+            sudo cp /usr/lib/syslinux/modules/bios/*.c32 "$NEW_ISO_DIR/isolinux/" 2>/dev/null || true
+        fi
+
+        # Копируем конфигурационные файлы из оригинального ISO, если они существуют
+        if [ -f "$EXTRACT_DIR/isolinux/isolinux.cfg" ]; then
+            sudo cp "$EXTRACT_DIR/isolinux/isolinux.cfg" "$NEW_ISO_DIR/isolinux/"
+        elif [ -f "$EXTRACT_DIR/isolinux/txt.cfg" ]; then
+            sudo cp "$EXTRACT_DIR/isolinux/txt.cfg" "$NEW_ISO_DIR/isolinux/"
+        else
+            log "Предупреждение: не найдена конфигурация isolinux. Загрузка может не работать."
+            # Создаём минимальную конфигурацию (по желанию)
+            echo "DEFAULT linux" | sudo tee "$NEW_ISO_DIR/isolinux/isolinux.cfg"
+            echo "LABEL linux" | sudo tee -a "$NEW_ISO_DIR/isolinux/isolinux.cfg"
+            echo "  KERNEL /casper/vmlinuz" | sudo tee -a "$NEW_ISO_DIR/isolinux/isolinux.cfg"
+            echo "  INITRD /casper/initrd" | sudo tee -a "$NEW_ISO_DIR/isolinux/isolinux.cfg"
+            echo "  APPEND root=/dev/ram0 ramdisk_size=1500000 ip=frommedia" | sudo tee -a "$NEW_ISO_DIR/isolinux/isolinux.cfg"
+        fi
+    fi
+fi
+
+# Определяем путь к isohdpfx.bin (для гибридного режима)
 ISOHDPFX="/usr/lib/ISOLINUX/isohdpfx.bin"
 if [ ! -f "$ISOHDPFX" ]; then
     ISOHDPFX="/usr/lib/syslinux/isohdpfx.bin"
 fi
 if [ ! -f "$ISOHDPFX" ]; then
-    echo "Предупреждение: isohdpfx.bin не найден."
+    log "Предупреждение: isohdpfx.bin не найден. ISO может не быть гибридным."
     ISOHDPFX_OPT=""
 else
     ISOHDPFX_OPT="-isohybrid-mbr $ISOHDPFX"
 fi
 
+log "Запуск xorriso для создания ISO"
 sudo xorriso -as mkisofs \
     -iso-level 3 \
     -full-iso9660-filenames \
@@ -105,7 +147,7 @@ sudo xorriso -as mkisofs \
     -boot-load-size 4 \
     -boot-info-table \
     -eltorito-alt-boot \
-    -e boot/grub/efi.img \
+    -e EFI/boot/bootx64.efi \
     -no-emul-boot \
     -isohybrid-gpt-basdat \
     "$NEW_ISO_DIR/"
