@@ -2,6 +2,8 @@
 
 [![ShellCheck](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/shellcheck.yml)
 
+[![Build Custom Kubuntu ISO (using build.sh)](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/build-iso.yml/badge.svg)](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/build-iso.yml)
+
 Техническое описание и инструкция по пользованию
 
 ## Установленное ПО
