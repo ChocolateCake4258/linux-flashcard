@@ -78,13 +78,13 @@ sudo rm -f "$EXTRACT_DIR/casper/filesystem.squashfs"
 sudo mksquashfs "$CUSTOM_ROOT" "$EXTRACT_DIR/casper/filesystem.squashfs" $SQUASHFS_COMP
 sudo rm -rf "$CUSTOM_ROOT"
 
-# Сборка нового ISO
+# Шаг 8: Сборка нового ISO
 log "Подготовка к сборке нового ISO"
 
-# Копируем содержимое extract в newiso
-sudo cp -r "$EXTRACT_DIR"/* "$NEW_ISO_DIR/"
+# Копируем всё содержимое extract в newiso (включая скрытые файлы!)
+sudo rsync -a "$EXTRACT_DIR/" "$NEW_ISO_DIR/"
 
-# Проверяем наличие isolinux.bin и, если отсутствует, копируем его из системы
+# Проверяем наличие isolinux.bin и, при необходимости, копируем из системы
 if [ ! -f "$NEW_ISO_DIR/isolinux/isolinux.bin" ]; then
     log "ВНИМАНИЕ: isolinux.bin не найден в newiso/isolinux. Пытаемся восстановить."
 
@@ -99,7 +99,7 @@ if [ ! -f "$NEW_ISO_DIR/isolinux/isolinux.bin" ]; then
 
         # Создаём каталог и копируем необходимые файлы
         sudo mkdir -p "$NEW_ISO_DIR/isolinux"
-        sudo cp /usr/lib/ISOLINUX/isolinux.bin "$NEW_ISO_DIR/isolinux/"
+        sudo rsync -a /usr/lib/ISOLINUX/ "$NEW_ISO_DIR/isolinux/"
         # Копируем модули syslinux (для корректной работы)
         if [ -d /usr/lib/syslinux/modules/bios ]; then
             sudo cp /usr/lib/syslinux/modules/bios/*.c32 "$NEW_ISO_DIR/isolinux/" 2>/dev/null || true
@@ -112,7 +112,7 @@ if [ ! -f "$NEW_ISO_DIR/isolinux/isolinux.bin" ]; then
             sudo cp "$EXTRACT_DIR/isolinux/txt.cfg" "$NEW_ISO_DIR/isolinux/"
         else
             log "Предупреждение: не найдена конфигурация isolinux. Загрузка может не работать."
-            # Создаём минимальную конфигурацию (по желанию)
+            # Создаём минимальную конфигурацию
             echo "DEFAULT linux" | sudo tee "$NEW_ISO_DIR/isolinux/isolinux.cfg"
             echo "LABEL linux" | sudo tee -a "$NEW_ISO_DIR/isolinux/isolinux.cfg"
             echo "  KERNEL /casper/vmlinuz" | sudo tee -a "$NEW_ISO_DIR/isolinux/isolinux.cfg"
@@ -136,20 +136,40 @@ fi
 
 log "Запуск xorriso для создания ISO"
 sudo xorriso -as mkisofs \
-    -iso-level 3 \
-    -full-iso9660-filenames \
     -volid "Custom Kubuntu" \
     -output "$WORK_DIR/$OUTPUT_ISO" \
-    $ISOHDPFX_OPT \
-    -b isolinux/isolinux.bin \
-    -c isolinux/boot.cat \
-    -no-emul-boot \
-    -boot-load-size 4 \
-    -boot-info-table \
+    -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+    -c boot.cat \
+    -b boot/grub/i386-pc/eltorito.img \
+    -no-emul-boot -boot-load-size 4 -boot-info-table \
     -eltorito-alt-boot \
     -e EFI/boot/bootx64.efi \
     -no-emul-boot \
     -isohybrid-gpt-basdat \
+    -iso-level 3 \
+    -rock -joliet \
     "$NEW_ISO_DIR/"
+
+# Проверка созданного ISO
+log "Проверка содержимого созданного ISO"
+mkdir -p test_mount
+if sudo mount -o loop "$WORK_DIR/$OUTPUT_ISO" test_mount; then
+    echo "Содержимое корня ISO:"
+    ls -la test_mount/
+    if [ -d test_mount/.disk ]; then
+        log ".disk присутствует"
+    else
+        log "ОШИБКА: .disk отсутствует!"
+    fi
+    if [ -f test_mount/casper/filesystem.squashfs ]; then
+        log "filesystem.squashfs присутствует"
+    else
+        log "ОШИБКА: filesystem.squashfs отсутствует!"
+    fi
+    sudo umount test_mount
+else
+    log "Не удалось смонтировать созданный ISO"
+fi
+rmdir test_mount
 
 log "Сборка завершена! Итоговый ISO: $WORK_DIR/$OUTPUT_ISO"

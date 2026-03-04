@@ -1,1 +1,5 @@
 *.iso
+extract/
+iso/
+newiso/
+test-build.sh
