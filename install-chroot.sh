@@ -63,15 +63,6 @@ cat > /usr/local/bin/code << 'EOF'
 EOF
 chmod +x /usr/local/bin/code
 
-
-# log "Установка PyCharm Community Edition"
-# wget -O /tmp/pycharm.tar.gz "https://download.jetbrains.com/python/pycharm-2025.3.3.tar.gz"
-# tar -xzf /tmp/pycharm.tar.gz -C /opt/
-# # Переименовываем (обычно pycharm-community-*)
-# mv /opt/pycharm-community-* /opt/pycharm-community
-# ln -s /opt/pycharm-community/bin/pycharm.sh /usr/local/bin/pycharm
-# rm /tmp/pycharm.tar.gz
-
 log "Установка Rust"
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 # Добавляем путь в /etc/profile.d

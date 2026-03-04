@@ -4,7 +4,7 @@ sudo apt install -y --no-install-recommends \
     wget \
     xorriso \
     isolinux \
-    mksquashfs \
     rsync \
     mount \
-    umount
+    squashfs-tools \
+    syslinux-common

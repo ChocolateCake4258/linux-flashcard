@@ -17,6 +17,8 @@ log() {
 
 log "Начало сборки кастомного ISO Kubuntu"
 
+./prepare.sh
+
 # Проверка наличия необходимых утилит
 for cmd in sudo wget xorriso mksquashfs rsync mount umount; do
     if ! command -v $cmd &> /dev/null; then
