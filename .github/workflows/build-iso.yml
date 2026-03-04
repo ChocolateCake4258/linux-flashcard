@@ -4,6 +4,9 @@ on:
   workflow_dispatch:      # позволяет запускать сборку вручную
   # push:
   #   branches: [ main ]    # можно запускать автоматически при пуше в main
+  
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -27,3 +30,14 @@ jobs:
           name: custom-kubuntu-iso
           path: custom-kubuntu.iso
           if-no-files-found: error
+
+      # Загружаем ISO в релиз (nightly)
+      - name: Upload ISO to Nightly Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly
+          name: Nightly Build
+          artifacts: custom-kubuntu.iso
+          allowUpdates: true      # разрешить обновление существующего релиза
+          replacesArtifacts: true # заменять старый ISO новым
+          token: ${{ secrets.GITHUB_TOKEN }}
