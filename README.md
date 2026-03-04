@@ -1,5 +1,7 @@
 # Разработка универсального загрузочного носителя с предустановленным программным обеспечением на базе Kubuntu Linux для учебных целей
 
+[![ShellCheck](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/shellcheck.yml)
+
 Техническое описание и инструкция по пользованию
 
 ## Установленное ПО
