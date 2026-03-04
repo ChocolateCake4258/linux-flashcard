@@ -4,6 +4,8 @@
 
 [![Build Custom Kubuntu ISO (using build.sh)](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/build-iso.yml/badge.svg)](https://github.com/ChocolateCake4258/linux-flashcard/actions/workflows/build-iso.yml)
 
+[Скачать ISO](https://github.com/ChocolateCake4258/linux-flashcard/releases/download/nightly/custom-kubuntu.iso)
+
 Техническое описание и инструкция по пользованию
 
 ## Установленное ПО
