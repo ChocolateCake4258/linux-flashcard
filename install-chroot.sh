@@ -52,16 +52,20 @@ apt update
 apt install -y dotnet-sdk-8.0
 
 log "Установка Visual Studio Code"
-wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
-install -D -o root -g root -m 644 packages.microsoft.gpg /etc/apt/keyrings/packages.microsoft.gpg
-rm packages.microsoft.gpg
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | apt-key add -
+add-apt-repository -y "deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main"
 apt update
 apt install -y code
+echo 'alias code="code --no-sandbox"' >> /etc/bash.bashrc
+cat > /usr/local/bin/code << 'EOF'
+#!/bin/bash
+/usr/bin/code --no-sandbox "$@"
+EOF
+chmod +x /usr/local/bin/code
 
 
 # log "Установка PyCharm Community Edition"
-# wget -O /tmp/pycharm.tar.gz "https://download.jetbrains.com/python/pycharm-community-latest.tar.gz"
+# wget -O /tmp/pycharm.tar.gz "https://download.jetbrains.com/python/pycharm-2025.3.3.tar.gz"
 # tar -xzf /tmp/pycharm.tar.gz -C /opt/
 # # Переименовываем (обычно pycharm-community-*)
 # mv /opt/pycharm-community-* /opt/pycharm-community
