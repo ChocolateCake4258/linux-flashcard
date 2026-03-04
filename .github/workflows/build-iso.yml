@@ -1,0 +1,29 @@
+name: Build Custom Kubuntu ISO (using build.sh)
+
+on:
+  workflow_dispatch:      # позволяет запускать сборку вручную
+  # push:
+  #   branches: [ main ]    # можно запускать автоматически при пуше в main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Клонируем репозиторий
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Запуск скрипта сборки
+      - name: Run build.sh
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      # Загружаем ISO как артефакт
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-kubuntu-iso
+          path: custom-kubuntu.iso
+          if-no-files-found: error
