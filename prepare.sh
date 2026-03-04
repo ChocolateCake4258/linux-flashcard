@@ -1,3 +1,4 @@
+#!/bin/bash
 # Установка необходимых утилит
 sudo apt install -y --no-install-recommends \
     sudo \
