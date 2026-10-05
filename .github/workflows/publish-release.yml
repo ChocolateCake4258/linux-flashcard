@@ -1,0 +1,41 @@
+# publish-release.yml — публикация собранного локально ISO в GitHub Release.
+# ВАЖНО: полная сборка ISO на бесплатном GitHub-hosted runner невозможна
+# (лимит диска ~14 ГБ против ~26 ГБ, нужных для unsquashfs+mksquashfs;
+# см. раздел «CI» в README). Поэтому сборка выполняется локально
+# (`make iso`), затем этот workflow загружает результат в релиз nightly.
+name: Publish nightly release
+
+on:
+  workflow_dispatch:        # запуск вручную
+  # push: { tags: ['v*'] } # когда потребуется версионные релизы
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить наличие собранного ISO
+        id: check
+        run: |
+          if [ -f custom-kubuntu.iso ]; then
+            echo "artifact=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "artifact=missing" >> "$GITHUB_OUTPUT"
+          fi
+      # Если ISO приложить нечем (сборка была не на этом runner) — ценной
+      # публикации нет; но всегда публикуем чейнджлог/инструкцию.
+
+      - name: Upload ISO to nightly release
+        if: steps.check.outputs.artifact == 'ok'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly
+          name: Nightly Build
+          artifacts: custom-kubuntu.iso,*.sha256
+          allowUpdates: true
+          replacesArtifacts: true
+          token: ${{ secrets.GITHUB_TOKEN }}

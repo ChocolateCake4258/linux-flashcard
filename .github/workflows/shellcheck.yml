@@ -4,16 +4,32 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   shellcheck:
-    name: Run ShellCheck
+    name: Lint bash-скриптов
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
-          severity: error      # минимальный уровень серьёзности (error, warning, info, style)
+          severity: error
+          shellcheck_flags: -x
+          ignore_paths: _reserve
+
+  powershell:
+    name: Parse PowerShell (AST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: potatoqualitee/psmodulecache@v5.5
+        with:
+          modules-to-install: PSScriptAnalyzer
+      - name: Analyze
+        shell: pwsh
+        run: |
+          $errs = Invoke-ScriptAnalyzer -Path win -Recurse -Severity Error
+          if ($errs) { $errs | Format-List RuleName,ScriptName,Line,Message; exit 1 }
+          Write-Host "OK: PowerShell-скрипты без ошибок"

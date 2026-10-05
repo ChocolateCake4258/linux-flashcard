@@ -1,5 +1,32 @@
+# --- артефакты сборки ISO ---
 *.iso
 extract/
 iso/
 newiso/
-test-build.sh
+test_mount/
+
+# --- виртуальные диски и образы ---
+*.qcow2
+*.img
+*.img.sha256
+*.sha256
+
+# --- способ B (build-all) ---
+seed.iso
+seed-src/
+qemu-installer.exe
+.autoinstall-done
+smoke-boot.log
+
+# --- QEMU (portable, скачивается вручную) ---
+qemu/
+
+# --- резерв исходников предыдущей версии ---
+_reserve/
+
+# --- байт-код Python (генерируется при запуске тестов) ---
+__pycache__/
+*.pyc
+
+# --- рабочие образы и журналы диагностики ---
+diagnostics*/

@@ -1,0 +1,5 @@
+# Prefer Ubuntu's integration package for the installed official Firefox Snap.
+# Leave other MozillaTeam packages and the repository configuration unchanged.
+Package: firefox
+Pin: release o=Ubuntu
+Pin-Priority: 1002

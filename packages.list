@@ -1,3 +1,16 @@
+# Список пакетов, устанавливаемых через apt (по опросу студентов, см. раздел работы)
+# Строки, начинающиеся с '#', игнорируются.
+#
+# ВАЖНО: этот файл читает install-chroot.sh (способ A, сборка кастомного ISO на
+# Linux) и подставляет результат в apt-get install. Поэтому здесь только
+# обычные deb-пакеты: snap-пакеты (code, pycharm-community, geogebra-discovery)
+# apt поставить не может.
+#
+# Для способа B (win\build-all.bat, флешка «два тома») пакетов два набора, и они
+# описаны прямо в win\autoinstall.yaml: базовые ставятся при сборке (packages:),
+# тяжёлые — при первом запуске (/usr/local/bin/first-boot-setup.sh).
+
+# --- Языки и среды исполнения ---
 python3
 python3-pip
 python3-dev
@@ -9,12 +22,23 @@ gdb
 make
 golang
 rustc
+cargo
+nodejs
+npm
+
+# --- Редакторы и IDE ---
 vim
 neovim
+
+# --- Базы данных ---
 postgresql
 postgresql-client
 sqlite3
+
+# --- Математика ---
 geogebra
+
+# --- Инструменты ---
 git
 docker.io
 wireshark

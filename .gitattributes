@@ -1,0 +1,16 @@
+# Кодировки и переносы строк (Windows-скрипты)
+# cmd.exe не понимает UTF-8/LF в .bat — комментарии начинают «выполняться».
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Windows PowerShell 5.1 читает .ps1 без BOM как ANSI — кириллица ломается.
+# Переносы LF: PowerShell одинаково читает и LF, и CRLF, а .bat выше требует
+# именно CRLF. Фактические файлы в репозитории — UTF-8 BOM + LF.
+*.ps1  text eol=lf
+*.psm1 text eol=lf
+
+# cloud-init требует, чтобы первая строка была ровно "#cloud-config": BOM нельзя.
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.sh   text eol=lf
+*.md   text eol=lf

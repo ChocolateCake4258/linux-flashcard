@@ -1,31 +1,27 @@
 #!/bin/bash
-# Скрипт для очистки временных файлов после сборки
-source "$(dirname "$0")/config.sh"
+# cleanup.sh — освобождение места и удаление временных артефактов сборки.
+# Безопасен: не удаляет итоговый ISO и исходный kubuntu.iso.
+set -euo pipefail
 
-set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/config.sh"
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-}
+require_not_root
 
-if [ "$EUID" -eq 0 ]; then
-    echo "Не запускайте от root, используйте sudo."
-    exit 1
-fi
+log "Очистка временных файлов сборки"
 
-# Проверка, смонтировано ли что-то внутри CUSTOM_ROOT
-if mountpoint -q "$CUSTOM_ROOT/proc" 2>/dev/null; then
-    sudo umount "$CUSTOM_ROOT/proc"
-fi
-if mountpoint -q "$CUSTOM_ROOT/dev" 2>/dev/null; then
-    sudo umount "$CUSTOM_ROOT/dev"
-fi
-if mountpoint -q "$CUSTOM_ROOT/sys" 2>/dev/null; then
-    sudo umount "$CUSTOM_ROOT/sys"
-fi
+umount_all_under "$CUSTOM_ROOT"
+umount_all_under "$ISO_MOUNT_DIR"
+umount_all_under "$TEST_MOUNT_DIR"
 
-# Удаление рабочих папок
-log "Удаление временных папок"
+log "Удаление рабочих папок"
 sudo rm -rf "$ISO_MOUNT_DIR" "$EXTRACT_DIR" "$NEW_ISO_DIR"
+sudo rmdir "$TEST_MOUNT_DIR" 2>/dev/null || true
 
-log "Очистка завершена"
+if [ -f "$ORIG_ISO" ]; then
+    log "Оригинальный ISO оставлен: $ORIG_ISO (для повторной сборки без скачивания)"
+    echo "  - удалить его можно вручную: rm -f $ORIG_ISO"
+fi
+
+ok "Очистка завершена"

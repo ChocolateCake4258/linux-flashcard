@@ -1,0 +1,12 @@
+[Unit]
+Description=First boot application setup (retry failed runs on next boot)
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/bin/bash /usr/local/bin/first-boot-setup.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+# Diagnostic SSD trial only; supplements the confined MozillaTeam profile.
+userns,
+owner @{HOME}/.config/mozilla/ rw,
+owner @{HOME}/.config/mozilla/** rwk,
+owner @{HOME}/.cache/mozilla/firefox/** k,
+owner @{PROC}/[0-9]*/cgroup r,
+owner @{PROC}/[0-9]*/oom_score_adj rw,
+owner @{PROC}/[0-9]*/smaps_rollup r,
+owner /{dev,run}/shm/wayland.mozilla.ipc.[0-9]* rw,
+/usr/bin/bwrap ixr,
