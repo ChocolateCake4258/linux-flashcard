@@ -1,0 +1,39 @@
+LinuxFlashcard — полный учебный комплект
+
+УСТАНОВЛЕНО
+C/C++, Python/Jupyter и Java; .NET/C#, Go, Rust/Cargo, Node.js/npm/TypeScript;
+VS Code и PyCharm; SQLite/PostgreSQL; GeoGebra и LibreOffice; Docker и Wireshark.
+Общая система остаётся в одном linux.img.vtoy на флешке.
+
+ОБЩАЯ ПРОВЕРКА
+В терминале Ctrl+Alt+T выберите НОВЫЙ каталог проверки:
+    pf-verify-all --state ~/full-suite-check
+Для запуска серверных проверок команда может попросить ваш пароль Linux,
+чтобы запустить Docker/PostgreSQL. Пароль вводится только внутри Linux.
+После выключения и нового запуска:
+    pf-verify-all --state ~/full-suite-check --recheck
+Проверяются сохранённые программы, SQLite/PostgreSQL и том Docker.
+
+ПРИМЕРЫ
+Исходники для копирования в свои НОВЫЕ проекты:
+    /usr/local/share/linux-flashcard/examples/full-suite/
+Там C#, Go, Rust, TypeScript, SQL, Python, ODT/ODS и GeoGebra.
+Примеры языков используют стандартные библиотеки и собираются без интернета.
+В Docker заранее подготовлены небольшие проверочные образы.
+
+РАБОЧИЕ ПРОГРАММЫ
+Откройте VS Code, PyCharm, LibreOffice, GeoGebra и Wireshark из меню приложений.
+Для PyCharm при первом запуске выберите бесплатные возможности; расширенные
+платные функции не требуются для обычного Python-проекта.
+Откройте свой проект/документ, измените, запустите или сохраните его и повторно
+откройте после перезапуска. Wireshark захватывает трафик внутри Linux.
+
+ДВА РЕЖИМА
+В Windows запускайте run-linux.bat с флешки обычным двойным щелчком.
+Для тяжёлых программ доступен отдельный run-linux-accelerated.bat — аппаратное
+ускорение WHPX. Настройка и параметры: ACCELERATION.txt. Если Windows ещё не
+подготовлена, enable-acceleration.bat включает нужный компонент с UAC.
+Для нативной загрузки выберите UEFI-флешку в boot-меню компьютера.
+Пользователь student, пароль, программы и данные общие. После работы штатно
+выключайте Linux перед сменой режима. pf-unified-status показывает текущий режим.
+Профиль полного комплекта: до 4 ГиБ RAM / 2 CPU; Windows требуется свой резерв.

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=JupyterLab
-Comment=Interactive notebooks and development environment
-Exec=/usr/local/bin/jupyter lab
-Path=/home/student
-Icon=applications-science
-Terminal=false
-Categories=Development;Education;

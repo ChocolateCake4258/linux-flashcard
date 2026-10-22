@@ -1,0 +1,49 @@
+LinuxFlashcard — Python, pip, venv и Jupyter Notebook
+
+ПРОВЕРКА КОМПЛЕКТА
+Откройте терминал Ctrl+Alt+T и выполните обычным student, без sudo:
+    pf-verify-python
+Проверяются реальное venv, офлайн pip-пакет, сервер Jupyter с авторизацией,
+ядро, выполненный notebook, русский текст и экспорт HTML. Тест использует
+свой временный каталог, останавливает сервер и удаляет только этот каталог.
+
+НОВЫЙ УЧЕБНЫЙ ПРОЕКТ
+    mkdir ~/python-lesson-1
+    cp -r /usr/local/share/linux-flashcard/examples/python/. ~/python-lesson-1/
+    cd ~/python-lesson-1
+Если каталог уже есть, выберите другое имя, чтобы сохранить свою работу.
+    python3 -m venv --system-site-packages .venv
+    . .venv/bin/activate
+    python -m pip --version
+    python -m pip install --no-index --no-deps --no-build-isolation ./demo-package
+    python hello.py
+Ожидается Hello from Python: 42. Пример pip устанавливается из локальных
+исходников, интернет не нужен. Пакеты проекта записываются только в .venv.
+--system-site-packages даёт окружению доступ к Jupyter/ipykernel из Debian;
+системные пакеты Python управляются APT, дополнительные — pip внутри venv.
+
+NOTEBOOK В БРАУЗЕРЕ
+Из каталога проекта с активированным venv:
+    pf-jupyter
+Откроется Firefox ESR внутри Linux. Если вкладка не открылась, скопируйте
+из терминала полный адрес http://127.0.0.1:.../?token=... в Firefox внутри Linux.
+Сервер доступен локально; используйте адрес и token, которые он напечатал.
+Откройте lesson.ipynb, ядро LinuxFlashcard (project).
+Shift+Enter выполняет ячейку; Cell → Run All выполняет все ячейки.
+Ожидаются 42 и файл result.txt с русским текстом в каталоге проекта.
+Измените текст/вычисление, выполните ячейки и сохраните notebook через Ctrl+S.
+Остановка сервера: Ctrl+C в его терминале, затем подтвердите y.
+
+ЭКСПОРТ БЕЗ БРАУЗЕРА
+С активным venv можно выполнить и сохранить отдельную копию:
+    python -m nbconvert --to notebook --execute lesson.ipynb --output executed.ipynb
+    python -m nbconvert --to html executed.ipynb --output executed.html
+Ядро проекта регистрируется при pf-jupyter в .venv, не в общей HOME-настройке.
+
+ПОСЛЕ ВЫКЛЮЧЕНИЯ И НОВОГО ЗАПУСКА
+    cd ~/python-lesson-1
+    . .venv/bin/activate
+    python hello.py
+    pf-jupyter
+Откройте сохранённый notebook и result.txt, проверьте изменения и результаты.
+Окружение, пакет и документы остаются в том же записываемом QCOW2.

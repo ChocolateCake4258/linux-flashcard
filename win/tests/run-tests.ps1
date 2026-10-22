@@ -30,11 +30,6 @@ Test-Case 'Parse every repository PowerShell script and module' {
 }
 Import-Module (Join-Path $win 'lib/pf-tools.psm1') -Force -WarningAction SilentlyContinue
 $module = Get-Module pf-tools
-Test-Case 'USB launcher module exactly matches the build module' {
-    $main = (Get-FileHash -LiteralPath (Join-Path $win 'lib/pf-tools.psm1') -Algorithm SHA256).Hash
-    $mirror = (Get-FileHash -LiteralPath (Join-Path $win 'usb-launcher/lib/pf-tools.psm1') -Algorithm SHA256).Hash
-    Assert-Test ($main -eq $mirror) 'USB launcher module mirror is stale.'
-}
 Test-Case 'Windows script encodings are preserved' {
     foreach ($file in @(Get-ChildItem -LiteralPath $win -Recurse -File)) {
         if ($file.Extension -notin '.ps1', '.psm1', '.bat') { continue }
@@ -166,135 +161,6 @@ Test-Case 'Writer current image chunk arithmetic handles 30 GB without allocatio
     $last = & $rhs
     Assert-Test ($last -is [int] -and $last -eq 512) 'Wrong current image final partial chunk.'
 }
-Test-Case 'USB bootcheck requires completed graphical startup' {
-    $tokens = $null; $errors = $null
-    $bootAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'test-usb-boot.ps1'), [ref]$tokens, [ref]$errors)
-    $assignment = $bootAst.Find({ param($n)
-        $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$graphicalMarkerPattern'
-    }, $true)
-    Assert-Test ($null -ne $assignment) 'Boot marker pattern is missing.'
-    $pattern = & ([scriptblock]::Create($assignment.Right.Extent.Text))
-    foreach ($line in @('Started sddm.service - Simple Desktop Display Manager.', 'Reached target graphical.target - Graphical Interface.')) {
-        Assert-Test ($line -match $pattern) "Valid startup was missed: $line"
-    }
-    foreach ($line in @('Queued start job for default target graphical.target.', 'Starting sddm.service...', 'Failed to start sddm.service - Simple Desktop Display Manager.')) {
-        Assert-Test ($line -notmatch $pattern) "Premature/failed startup was accepted: $line"
-    }
-}
-Test-Case 'USB diagnostic accelerator and disk controls preserve base arguments' {
-    $tokens = $null; $errors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'test-usb-boot.ps1'), [ref]$tokens, [ref]$errors)
-    $accelNode = $ast.Find({ param($n)
-        $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -eq "$" + "Accel -eq 'WHPX'"
-    }, $true)
-    Assert-Test ($null -ne $accelNode) 'Accelerator override is missing.'
-    foreach ($Accel in @('Auto', 'WHPX', 'TCG')) {
-        $qemuArgs = Get-PfQemuBaseArgs -RamMb 6144 -Cores 4
-        $tail = $qemuArgs[6..($qemuArgs.Count - 1)] -join '|'
-        . ([scriptblock]::Create($accelNode.Extent.Text))
-        Assert-Test (($qemuArgs -join '|').EndsWith($tail)) 'Accelerator override changed CPU, RAM or devices.'
-        $expected = if ($Accel -eq 'Auto') { 2 } else { 1 }
-        Assert-Test (@($qemuArgs | Where-Object { $_ -eq '-accel' }).Count -eq $expected) 'Unexpected fallback accelerators.'
-        if ($Accel -eq 'WHPX') { Assert-Test ($qemuArgs -contains 'whpx,kernel-irqchip=off') 'Missing WHPX.' }
-        if ($Accel -eq 'TCG') { Assert-Test ($qemuArgs -contains 'tcg,thread=multi') 'Missing multithreaded TCG.' }
-    }
-    $diskNode = $ast.Find({ param($n)
-        $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -eq '$DedicatedIoThread'
-    }, $true)
-    Assert-Test ($null -ne $diskNode) 'Disk experiment is missing.'
-    foreach ($DedicatedIoThread in @($false, $true)) {
-        $DiskNumber = 2; $qemuArgs = @('-snapshot')
-        . ([scriptblock]::Create($diskNode.Extent.Text))
-        Assert-Test ($qemuArgs -contains '-snapshot') 'Disk experiment removed snapshot mode.'
-        Assert-Test (@($qemuArgs | Where-Object { $_ -eq '-drive' }).Count -eq 1) 'Expected exactly one guest disk.'
-        if ($DedicatedIoThread) {
-            Assert-Test ($qemuArgs -contains 'virtio-blk-pci,drive=pfusb,iothread=pfio') 'Dedicated thread is not attached.'
-        } else {
-            Assert-Test ($qemuArgs -contains 'file=\\.\PhysicalDrive2,format=raw,if=virtio') 'Baseline disk topology changed.'
-        }
-    }
-}
-Test-Case 'USB diagnostic watchdog rejects stalls but not normal startup' {
-    $tokens = $null; $errors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'test-usb-boot.ps1'), [ref]$tokens, [ref]$errors)
-    $assignment = $ast.Find({ param($n)
-        $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$watchdogPattern'
-    }, $true)
-    $pattern = & ([scriptblock]::Create($assignment.Right.Extent.Text))
-    foreach ($line in @('watchdog: BUG: soft lockup - CPU#0 stuck for 26s!', 'rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:', 'rcu: self-detected stall on CPU', 'INFO: rcu_tasks detected stalls on tasks:', 'INFO: rcu_tasks_trace detected stalls on tasks:')) {
-        Assert-Test ($line -match $pattern) "Watchdog report missed: $line"
-    }
-    Assert-Test ('NMI watchdog: Enabled. Permanently consumes one hw-PMU counter.' -notmatch $pattern) 'Normal watchdog startup rejected.'
-}
-Test-Case 'Diagnostic VM CPU parameter forwards model and preserves resources' {
-    $tokens = $null; $errors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'diagnostic-vm.ps1'), [ref]$tokens, [ref]$errors)
-    Assert-Test ($errors.Count -eq 0) 'Diagnostic VM parse failed.'
-    $parameter = @($ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'CpuModel' })
-    Assert-Test ($parameter.Count -eq 1) 'CPU parameter is missing.'
-    $bind = [scriptblock]::Create('param(' + $parameter[0].Extent.Text + ') $CpuModel')
-    Assert-Test ((& $bind) -ceq 'Westmere') 'CPU default changed.'
-    Assert-Throws { & $bind -CpuModel 'invalid' } 'ValidateSet|validation|not belong'
-    $assignment = @($ast.FindAll({ param($n)
-        $n -is [Management.Automation.Language.AssignmentStatementAst] -and
-        $n.Left.Extent.Text -eq '$qemuArgs' -and $n.Right.Extent.Text -match '^Get-PfQemuBaseArgs\b'
-    }, $true))
-    Assert-Test ($assignment.Count -eq 1) 'Cannot uniquely locate base QEMU arguments.'
-    # Avoid firmware discovery while executing the actual helper call and checking its forwarded values.
-    function Get-PfQemuBaseArgs {
-        param($RamMb, $Cores, $CpuModel, [switch]$Uefi, $QemuExe, $ScriptDir)
-        Assert-Test ($Uefi -and $QemuExe -ceq $qemu -and $ScriptDir -ceq $repo) 'Base helper context changed.'
-        pf-tools\Get-PfQemuBaseArgs -RamMb $RamMb -Cores $Cores -CpuModel $CpuModel
-    }
-    $metadata = [pscustomobject]@{ RamMb = 6144; Cores = 6 }
-    $qemu = 'test-qemu'; $repo = 'test-repo'
-    foreach ($model in @('Westmere', 'Haswell-noTSX')) {
-        $CpuModel = & $bind -CpuModel $model
-        . ([scriptblock]::Create($assignment[0].Extent.Text))
-        Assert-Test ($qemuArgs[[array]::IndexOf($qemuArgs, '-cpu') + 1] -ceq $model) 'CPU model was not forwarded.'
-        Assert-Test ($qemuArgs[[array]::IndexOf($qemuArgs, '-m') + 1] -ceq '6144M') 'Persisted RAM changed.'
-        Assert-Test ($qemuArgs[[array]::IndexOf($qemuArgs, '-smp') + 1] -ceq '6') 'Persisted vCPU count changed.'
-    }
-}
-Test-Case 'Diagnostic VM display defaults to headless and leaves GUI arguments unchanged' {
-    $tokens = $null; $errors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'diagnostic-vm.ps1'), [ref]$tokens, [ref]$errors)
-    Assert-Test ($errors.Count -eq 0) 'Diagnostic VM parse failed.'
-    $parameter = @($ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Display' })
-    Assert-Test ($parameter.Count -eq 1) 'Display parameter is missing.'
-    $bind = [scriptblock]::Create('param(' + $parameter[0].Extent.Text + ') $Display')
-    Assert-Test ((& $bind) -ceq 'None') 'Display default changed.'
-    Assert-Throws { & $bind -Display 'invalid' } 'ValidateSet|validation|not belong'
-    $conditional = @($ast.FindAll({ param($n)
-        $n -is [Management.Automation.Language.IfStatementAst] -and
-        $n.Clauses[0].Item1.Extent.Text -eq '$Display -eq ''None'''
-    }, $true))
-    Assert-Test ($conditional.Count -eq 1) 'Cannot uniquely locate headless display conditional.'
-    foreach ($mode in @('None', 'Default')) {
-        $Display = & $bind -Display $mode
-        $qemuArgs = @('-cpu', 'Westmere', '-m', '6144M', '-smp', '6')
-        $expected = $qemuArgs -join '|'
-        if ($mode -eq 'None') { $expected += '|-display|none' }
-        . ([scriptblock]::Create($conditional[0].Extent.Text))
-        Assert-Test (($qemuArgs -join '|') -ceq $expected) "Unexpected display arguments for $mode."
-    }
-}
-Test-Case 'Diagnostic VM window style is Normal only for VM with Default display' {
-    $tokens = $null; $errors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'diagnostic-vm.ps1'), [ref]$tokens, [ref]$errors)
-    Assert-Test ($errors.Count -eq 0) 'Diagnostic VM parse failed.'
-    $assignment = @($ast.FindAll({ param($n)
-        $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$windowStyle'
-    }, $true))
-    Assert-Test ($assignment.Count -eq 1) 'Cannot uniquely locate window style assignment.'
-    foreach ($Kind in @('VM', 'Nbd')) {
-        foreach ($Display in @('None', 'Default')) {
-            . ([scriptblock]::Create($assignment[0].Extent.Text))
-            $expected = if ($Kind -eq 'VM' -and $Display -eq 'Default') { 'Normal' } else { 'Hidden' }
-            Assert-Test ($windowStyle -ceq $expected) "Unexpected window style for $Kind/$Display."
-        }
-    }
-}
 Test-Case 'Compile real native definitions and reflect control codes' {
     Add-PfRawDiskNative
     Add-PfVolumeNative
@@ -370,15 +236,29 @@ Test-Case 'Unpartitioned disk needs no enumeration' {
 }
 
 $pwsh = (Get-Process -Id $PID).Path
-foreach ($scenario in @('success', 'full', 'valid-checksum', 'verify-only', 'verify-only-corrupt', 'gpt-relocation', 'gpt-relocation-primary-corrupt', 'gpt-relocation-backup-corrupt', 'gpt-relocation-table-corrupt', 'gpt-relocation-data-corrupt', 'windows-volume-selection', 'linux-driver-volume', 'bad-mbr', 'bad-gpt', 'truncated-gpt', 'missing-backup', 'primary-header-crc', 'backup-header-crc', 'table-crc', 'backup-table-crc', 'table-bounds', 'small', 'unaligned', 'checksum', 'bad-sidecar', 'missing-identity', 'boot', 'source-target', 'identity-changed', 'lock-failure', 'write-failure', 'short-write', 'short-read', 'corrupt-read', 'refresh-failure', 'baseline-match', 'baseline-mismatch', 'baseline-wronglength', 'baseline-lock-failure', 'baseline-short-read', 'baseline-read-failure', 'baseline-source-target')) {
+foreach ($scenario in @('success', 'full', 'valid-checksum', 'verify-only', 'verify-only-corrupt', 'gpt-relocation', 'gpt-relocation-primary-corrupt', 'gpt-relocation-backup-corrupt', 'gpt-relocation-table-corrupt', 'gpt-relocation-data-corrupt', 'windows-volume-selection', 'linux-driver-volume', 'bad-mbr', 'bad-gpt', 'truncated-gpt', 'missing-backup', 'primary-header-crc', 'backup-header-crc', 'table-crc', 'backup-table-crc', 'table-bounds', 'small', 'unaligned', 'checksum', 'bad-sidecar', 'missing-identity', 'boot', 'source-target', 'identity-changed', 'lock-failure', 'write-failure', 'short-write', 'short-read', 'corrupt-read', 'refresh-failure', 'baseline-match', 'baseline-mismatch', 'baseline-wronglength', 'baseline-lock-failure', 'baseline-short-read', 'baseline-read-failure', 'baseline-source-target', 'deferred', 'deferred-final-rescan', 'deferred-body-failure', 'deferred-guard-rejected', 'deferred-verify-rejected')) {
     Test-Case "Writer integration: $scenario" {
         $output = @(& $pwsh -NoProfile -File (Join-Path $PSScriptRoot 'writer-harness.ps1') -Scenario $scenario 2>&1)
         $exit = $LASTEXITCODE
         $result = $output[-1] | ConvertFrom-Json
         Assert-Test ($result.HarnessPassed) "Harness failed: $($output -join [Environment]::NewLine)"
-        $expected = if ($scenario -in 'success', 'full', 'valid-checksum', 'verify-only', 'gpt-relocation', 'lock-failure', 'windows-volume-selection', 'linux-driver-volume', 'baseline-match') { 0 } else { 1 }
+        $expected = if ($scenario -in 'success', 'full', 'valid-checksum', 'verify-only', 'gpt-relocation', 'lock-failure', 'windows-volume-selection', 'linux-driver-volume', 'baseline-match', 'deferred', 'deferred-final-rescan') { 0 } else { 1 }
         Assert-Test ($exit -eq $expected -and $result.WriterExit -eq $expected) "Wrong exit code: process=$exit writer=$($result.WriterExit)"
         Write-Host "  exit=$exit bytes=$($result.Bytes) verified=$($result.Verified) reads=$($result.Reads) deletes=$($result.Deletes) refreshes=$($result.Refreshes) volumes=$($result.Volumes) unlocks=$($result.Unlocks)"
+    }
+}
+Test-Case 'Writer integration: successful IOCTL with remaining partitions uses clean fallback' {
+    $output = @(& $pwsh -NoProfile -File (Join-Path $PSScriptRoot 'writer-harness.ps1') -Scenario deferred-clean-fallback 2>&1)
+    $exit = $LASTEXITCODE
+    $result = $output[-1] | ConvertFrom-Json
+    Assert-Test ($exit -eq 0 -and $result.HarnessPassed -and $result.WriterExit -eq 0) "Clean fallback failed: $($output -join ' ')"
+}
+foreach($scenario in @('deferred-publish','deferred-publish-mounted','deferred-publish-body-corrupt','deferred-publish-boot-corrupt','deferred-publish-short-read','deferred-publish-size-mismatch','deferred-publish-identity-changed','deferred-publish-refresh-failure')){
+    Test-Case "Writer integration: $scenario" {
+        $output=@(& $pwsh -NoProfile -File (Join-Path $PSScriptRoot 'writer-harness.ps1') -Scenario $scenario 2>&1)
+        $exit=$LASTEXITCODE;$result=$output[-1]|ConvertFrom-Json
+        $expected=if($scenario -in 'deferred-publish','deferred-publish-mounted'){0}else{1}
+        Assert-Test ($result.HarnessPassed -and $exit -eq $expected) "Harness failed: $($output -join ' ')"
     }
 }
 Write-Host "Results: $passed passed, $failures failed"

@@ -1,0 +1,15 @@
+[Unit]
+Description=LinuxFlashcard fresh-image factory preparation
+After=network-online.target cloud-final.service
+Wants=network-online.target
+Before=display-manager.service
+Before=pf-first-password.service
+ConditionPathExists=/sys/firmware/qemu_fw_cfg/by_name/opt/pf.factory/raw
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'exec > >(tee -a /var/log/pf-factory.log /dev/ttyS0) 2>&1; exec /usr/local/sbin/pf-factory-bootstrap'
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

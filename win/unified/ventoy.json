@@ -1,0 +1,7 @@
+{
+  "control": [
+    { "VTOY_DEFAULT_IMAGE": "/linux.img.vtoy" },
+    { "VTOY_MENU_TIMEOUT": "1" }
+  ],
+  "image_list": ["/linux.img.vtoy"]
+}

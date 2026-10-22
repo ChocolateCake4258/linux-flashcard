@@ -1,0 +1,52 @@
+LinuxFlashcard — первая учебная группа: командная строка и C/C++
+
+УСТАНОВЛЕНО
+Git, Vim, Neovim, GCC/G++, GDB, Make и заголовки стандартной библиотеки C.
+Терминал: Ctrl+Alt+T. Для команд, исходников и пароля нужна английская раскладка;
+Alt+Shift переключает US/RU.
+
+НАЧАЛО РАБОТЫ
+Скопируйте пример в НОВЫЙ каталог своей домашней папки:
+    mkdir ~/cli-lesson-1
+    cp /usr/local/share/linux-flashcard/examples/cli/* ~/cli-lesson-1/
+    cd ~/cli-lesson-1
+Если каталог уже существует, выберите другое имя, чтобы сохранить свою работу.
+
+СБОРКА И ЗАПУСК
+    make check
+    ./build/hello-c
+    ./build/hello-cpp
+Обе программы выводят приветствие и число 42. make использует GCC и G++,
+собирает с предупреждениями и отладочной информацией; исходники остаются рядом.
+
+РЕДАКТОРЫ
+    vim hello.c
+или
+    nvim hello.cpp
+i — ввод, Esc — командный режим, :wq и Enter — сохранить и выйти.
+:q! и Enter — выйти без сохранения. Можно открыть исходник и в Mousepad.
+
+ЛОКАЛЬНЫЙ GIT
+    git init
+    git config user.name "Student"
+    git config user.email "student@example.invalid"
+    git add hello.c hello.cpp Makefile
+    git commit -m "First C and C++ programs"
+    git log --oneline
+Эти имя и адрес задаются только для учебного проекта. Интернет не требуется.
+
+ОТЛАДЧИК
+    gdb ./build/hello-c
+В GDB последовательно: break add, run, print left + right, continue, quit.
+Ожидается остановка в add() и результат 42.
+
+ПРОВЕРКА КОМПЛЕКТА
+    pf-verify-cli
+Команда проверяет оба компилятора, Make, локальный Git-коммит, редакторы и GDB
+во временном каталоге, затем удаляет только свой тестовый каталог.
+Запускайте её обычным student, без sudo.
+
+СОХРАНЕНИЕ
+Сохраните исходники, штатно выключите Linux и снова откройте run-debian.bat.
+Вернитесь в ~/cli-lesson-1, выполните make check и git log --oneline.
+Проект, коммит и установленные инструменты должны сохраниться в том же QCOW2.

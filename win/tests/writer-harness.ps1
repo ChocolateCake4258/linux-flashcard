@@ -48,8 +48,9 @@ public static class TestGpt {
 public static class TestState {
     public static string DiskPath, Scenario;
     public static int Partitions = 2, Deletes, Refreshes, Writes, Reads, Unlocks;
-    public static long Written;
+    public static long Written, DiskBytes = 16777216, ReadBytes;
     public static bool Changed;
+    public static bool DeferredRescan;
     public static List<string> Events = new List<string>();
     public static List<TestHandle> Handles = new List<TestHandle>();
 }
@@ -84,21 +85,44 @@ public static class PfRawDisk {
         h.Stream.Write(bytes, 0, count);
         TestState.Written += count;
     }
+    public static void WriteAt(TestHandle h, byte[] bytes, int count, long offset) {
+        TestState.Events.Add("write-at:" + offset + ":" + count);
+        if (TestState.Scenario == "deferred-body-failure") throw new IOException("Injected deferred body failure");
+        if (TestState.Scenario == "deferred-final-rescan" && count == 1048576 && offset > 0 && !TestState.DeferredRescan) {
+            TestState.DeferredRescan = true;
+            throw new System.ComponentModel.Win32Exception(433, "Injected GPT rescan");
+        }
+        h.Stream.Position = offset;
+        Write(h, bytes, count);
+    }
     public static uint Read(TestHandle h, byte[] bytes, long offset) {
         TestState.Reads++; TestState.Events.Add("read");
         h.Stream.Position = offset;
         int n = h.Stream.Read(bytes, 0, bytes.Length);
         if (TestState.Scenario == "short-read" || TestState.Scenario == "baseline-short-read") return (uint)(n - 1);
         if (TestState.Scenario == "corrupt-read") bytes[123] ^= 1;
+        if (TestState.Scenario == "deferred-publish-body-corrupt" && offset >= 1048576) bytes[123] ^= 1;
+        if (TestState.Scenario == "deferred-publish-boot-corrupt" && offset == 0) bytes[123] ^= 1;
+        if (TestState.Scenario == "deferred-publish-identity-changed") TestState.Changed = true;
+        if (TestState.Scenario == "deferred-publish-short-read" && TestState.Written > 0) return (uint)(n - 1);
+        TestState.ReadBytes += n;
         return (uint)n;
     }
     public static void Flush(TestHandle h) { h.Stream.Flush(); }
     public static int DeleteLayout(string path) {
-        TestState.Deletes++; TestState.Events.Add("delete"); TestState.Partitions = 0; return 0;
+        TestState.Deletes++; TestState.Events.Add("delete");
+        if (TestState.Scenario != "deferred-clean-fallback") TestState.Partitions = 0;
+        return 0;
     }
     public static void Refresh(string path) {
         TestState.Refreshes++; TestState.Events.Add("refresh");
-        if (TestState.Scenario == "refresh-failure") throw new IOException("Injected refresh failure");
+        if (TestState.Scenario.StartsWith("deferred")) TestState.Partitions = 2;
+        if (TestState.Scenario == "refresh-failure" || TestState.Scenario == "deferred-publish-refresh-failure") throw new IOException("Injected refresh failure");
+        if (TestState.Scenario == "deferred-publish-mounted") {
+            using (var disk = new FileStream(TestState.DiskPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) {
+                disk.Position = 5242880; disk.WriteByte(0x91); // Simulated post-mount filesystem metadata.
+            }
+        }
     }
 }
 public static class PfVolume {
@@ -108,6 +132,7 @@ public static class PfVolume {
     }
     public static void LockAndDismount(TestHandle h) {
         TestState.Events.Add("lock");
+        if (TestState.Scenario.StartsWith("deferred-publish") && TestState.Partitions > 0) throw new IOException("Injected mounted FAT lock failure");
         if ((TestState.Scenario == "lock-failure" || TestState.Scenario == "baseline-lock-failure" || TestState.Scenario == "identity-changed") &&
             TestState.Handles.FindAll(x => x.Kind == "volume").Count == 2) {
             if (TestState.Scenario == "identity-changed") TestState.Changed = true;
@@ -121,6 +146,8 @@ public static class PfVolume {
     [TestState]::Scenario = $Scenario
     $isRelocation = $Scenario -like 'gpt-relocation*'
     $isBaseline = $Scenario -like 'baseline-*'
+    $isDeferred = $Scenario -like 'deferred*'
+    $isBeforePublish=$Scenario -like 'deferred-publish*'
     $isReadOnlyScenario = $isRelocation -or $Scenario -in 'verify-only', 'verify-only-corrupt'
     if ($Scenario -in 'windows-volume-selection', 'linux-driver-volume') { [TestState]::Partitions = 3 }
     Require ([TestGpt]::Crc([Text.Encoding]::ASCII.GetBytes('123456789'), 0, 9) -eq [Convert]::ToUInt32('CBF43926', 16)) 'Fixture CRC implementation failed known vector'
@@ -177,8 +204,9 @@ public static class PfVolume {
     if ($Scenario -eq 'truncated-gpt') { [BitConverter]::GetBytes([uint64]($fixtureLastSector + 1)).CopyTo($bytes, 544) }
     if ($Scenario -eq 'missing-backup') { [Array]::Clear($bytes, $backupOffset, 512) }
     [IO.File]::WriteAllBytes($global:TestImage, $bytes)
-    $initialDisk = New-Object byte[] (16MB)
-    $initialDisk[$bytes.Length] = 0x4a
+    if($isBeforePublish -and $Scenario -ne 'deferred-publish-size-mismatch'){[TestState]::DiskBytes=$length}
+    $initialDisk = New-Object byte[] ([TestState]::DiskBytes)
+    if($initialDisk.Length -gt $bytes.Length){$initialDisk[$bytes.Length] = 0x4a}
     if ($isReadOnlyScenario) {
         [Array]::Copy($bytes, $initialDisk, $bytes.Length)
         if ($Scenario -eq 'verify-only-corrupt') { $initialDisk[123] = $initialDisk[123] -bxor 1 }
@@ -219,7 +247,7 @@ public static class PfVolume {
         $sidecar = if ($Scenario -eq 'checksum') { '0' * 64 } else { 'invalid' }
         [IO.File]::WriteAllText($global:TestImage + '.sha256', $sidecar)
     }
-    if ($Scenario -eq 'valid-checksum') {
+    if ($Scenario -eq 'valid-checksum' -or $isBeforePublish) {
         $checksum = (Get-FileHash -LiteralPath $global:TestImage -Algorithm SHA256).Hash
         [IO.File]::WriteAllText($global:TestImage + '.sha256', $checksum)
     }
@@ -231,7 +259,7 @@ public static class PfVolume {
             param($Number)
             [pscustomobject]@{
                 Number = 7; Path = $(if ([TestState]::Changed) { 'changed-device' } else { 'test-device' })
-                SerialNumber = 'serial'; Size = 16MB; BusType = 'USB'; LogicalSectorSize = 512
+                SerialNumber = 'serial'; Size = [TestState]::DiskBytes; BusType = 'USB'; LogicalSectorSize = 512
                 IsBoot = ([TestState]::Scenario -eq 'boot'); IsSystem = $false
                 IsReadOnly = $false; IsOffline = $false; NumberOfPartitions = [TestState]::Partitions
             }
@@ -260,6 +288,13 @@ public static class PfVolume {
             }
         }
         function script:Update-HostStorageCache { }
+        function script:diskpart.exe {
+            param([Parameter(ValueFromRemainingArguments = $true)]$Arguments)
+            if ([TestState]::Scenario -ne 'deferred-clean-fallback') { throw 'Unexpected diskpart call in harness.' }
+            [TestState]::Events.Add('diskpart-clean')
+            [TestState]::Partitions = 0
+            $global:LASTEXITCODE = 0
+        }
         function script:Get-PfDiskReport { 'fake disk' }
         function script:Write-PfRawBytes {
             param($Handle, [byte[]]$Bytes, [int]$Count)
@@ -278,7 +313,7 @@ public static class PfVolume {
             [int][PfRawDisk]::Read($Handle, $Bytes, $Offset)
         }
     }
-    function Get-CimInstance { param($ClassName) [pscustomobject]@{ InterfaceType = 'USB'; Index = 7; Model = 'test'; Size = 16MB } }
+    function Get-CimInstance { param($ClassName) [pscustomobject]@{ InterfaceType = 'USB'; Index = 7; Model = 'test'; Size = [TestState]::DiskBytes } }
     function Test-PfIsAdmin { $true }
     function Write-PfRawBytes {
         param($Handle, [byte[]]$Bytes, [int]$Count)
@@ -331,14 +366,18 @@ public static class PfVolume {
         $edits += [pscustomobject]@{ Start = $roots[0].Extent.StartOffset; Length = $roots[0].Extent.EndOffset - $roots[0].Extent.StartOffset; Text = $rootText }
     }
     foreach ($edit in ($edits | Sort-Object Start -Descending)) { $text = $text.Remove($edit.Start, $edit.Length).Insert($edit.Start, $edit.Text) }
-    $arguments = @{ ImagePath = $global:TestImage; DiskNumber = 7; Yes = $true; ExpectedDevicePath = 'test-device'; ExpectedSerialNumber = 'serial'; ExpectedSize = 16MB; VerifyFull = ($Scenario -eq 'full' -or $isReadOnlyScenario) }
+    $arguments = @{ ImagePath = $global:TestImage; DiskNumber = 7; Yes = $true; ExpectedDevicePath = 'test-device'; ExpectedSerialNumber = 'serial'; ExpectedSize = [TestState]::DiskBytes; VerifyFull = ($Scenario -eq 'full' -or $isReadOnlyScenario) }
     if ($isReadOnlyScenario) { $arguments.VerifyOnly = $true }
     if ($isBaseline) { $arguments.ExpectedCurrentImagePath = $baselineFile }
     if ($isRelocation) { $arguments.AllowGptRelocation = $true }
     if ($Scenario -eq 'missing-identity') { $arguments.Remove('ExpectedDevicePath') }
+    if ($isDeferred) { $arguments.DeferPartitionTable = $true; $arguments.VerifyFull = $true }
+    if($isBeforePublish){$arguments.VerifyBeforePublish=$true;$arguments.ResultPath=Join-Path $temp 'writer-result.json'}
+    if ($Scenario -eq 'deferred-guard-rejected') { $arguments.ExpectedCurrentImagePath = 'does-not-exist' }
+    if ($Scenario -eq 'deferred-verify-rejected') { $arguments.VerifyOnly = $true }
     $global:WriterExit = -99
     . ([scriptblock]::Create($text)) @arguments
-    $expected = if ($Scenario -in 'success', 'full', 'valid-checksum', 'verify-only', 'gpt-relocation', 'lock-failure', 'windows-volume-selection', 'linux-driver-volume', 'baseline-match') { 0 } else { 1 }
+    $expected = if ($Scenario -in 'success', 'full', 'valid-checksum', 'verify-only', 'gpt-relocation', 'lock-failure', 'windows-volume-selection', 'linux-driver-volume', 'baseline-match', 'deferred', 'deferred-final-rescan', 'deferred-clean-fallback', 'deferred-publish', 'deferred-publish-mounted') { 0 } else { 1 }
     Require ($global:WriterExit -eq $expected) "Expected writer exit $expected, got $global:WriterExit. $($global:WriterMessages -join '; ')"
     $reasons = @{
         'bad-mbr' = 'Expected a complete GPT'; 'bad-gpt' = 'Expected a complete GPT'
@@ -364,6 +403,15 @@ public static class PfVolume {
         'baseline-short-read' = 'Short current disk read at byte 0'
         'baseline-read-failure' = 'Injected current read open failure'
         'baseline-source-target' = 'source image or running project'
+        'deferred-body-failure' = 'Injected deferred body failure'
+        'deferred-guard-rejected' = 'explicit layout-clearing write mode'
+        'deferred-verify-rejected' = 'explicit layout-clearing write mode'
+        'deferred-publish-body-corrupt'='Deferred read-back mismatch'
+        'deferred-publish-boot-corrupt'='Deferred read-back mismatch'
+        'deferred-publish-short-read'='Deferred read-back mismatch'
+        'deferred-publish-size-mismatch'='exact target capacity'
+        'deferred-publish-identity-changed'='identity changed'
+        'deferred-publish-refresh-failure'='Injected refresh failure'
     }
     if ($reasons.ContainsKey($Scenario)) {
         Require (($global:WriterMessages -join '; ') -match [regex]::Escape($reasons[$Scenario])) "Wrong rejection reason: $($global:WriterMessages -join '; ')"
@@ -393,23 +441,50 @@ public static class PfVolume {
         if ($Scenario -in 'baseline-wronglength', 'baseline-source-target') { Require ([TestState]::Handles.Count -eq 0) 'Invalid baseline reached disk handles' }
     }
     $written = ([TestState]::Writes -gt 0 -and $Scenario -notin 'write-failure', 'short-write')
-    if ($written) {
+    if($isBeforePublish){
+        if(Test-Path -LiteralPath $arguments.ResultPath){
+            $receipt=Get-Content -LiteralPath $arguments.ResultPath -Raw -Encoding UTF8|ConvertFrom-Json
+            Require ($receipt.Complete -eq ($expected -eq 0)) 'Wrong completion receipt'
+        }else{Require ($Scenario -eq 'deferred-publish-size-mismatch') 'Missing writer receipt'}
+        Require (@([TestState]::Events|Where-Object{$_ -eq 'lock'}).Count -eq 0) 'Pre-publication verification attempted to relock mounted FAT'
+        $commits=@([TestState]::Events|Where-Object{$_ -like 'write-at:*:1048576'})
+        if($Scenario -in 'deferred-publish-body-corrupt','deferred-publish-short-read','deferred-publish-identity-changed'){
+            Require ($commits.Count -eq 0 -and [TestState]::Refreshes -eq 0) 'Failed body verification published GPT'
+        }elseif($Scenario -eq 'deferred-publish-size-mismatch'){
+            Require ([TestState]::Deletes -eq 0 -and [TestState]::Writes -eq 0) 'Capacity mismatch modified USB'
+        }else{
+            Require ([TestState]::Written -eq $bytes.Length -and $commits.Count -eq 2) 'Incomplete boot/GPT publication'
+            Require ([TestState]::Events.IndexOf('read') -lt [TestState]::Events.IndexOf($commits[0])) 'GPT was published before body read-back'
+            Require ([TestState]::Events.LastIndexOf('read') -lt [TestState]::Events.IndexOf('refresh') -or $Scenario -eq 'deferred-publish-boot-corrupt') 'Refresh preceded verification'
+            if($expected -eq 0){
+                Require ($receipt.BytesVerified -eq $bytes.Length -and [TestState]::ReadBytes -ge $bytes.Length -and $receipt.BeforePublicationBodyVerified) 'Missing complete read-back coverage'
+                Require ($receipt.ExpectedSourceSha256 -eq $checksum) 'Receipt lost validated source hash'
+                $actual=[IO.File]::ReadAllBytes($fakeDiskFile)
+                if($Scenario -eq 'deferred-publish-mounted'){
+                    Require ($actual[5MB] -eq 0x91) 'Post-mount metadata simulation did not run'
+                    $actual[5MB]=$bytes[5MB]
+                }
+                $comparison=[Security.Cryptography.SHA256]::Create()
+                try{Require ([Convert]::ToBase64String($comparison.ComputeHash($actual)) -ceq [Convert]::ToBase64String($comparison.ComputeHash($bytes))) 'Unexpected written bytes'}finally{$comparison.Dispose()}
+            }
+        }
+    }elseif ($written) {
         $actual = [IO.File]::ReadAllBytes($fakeDiskFile)
         $hash = [Security.Cryptography.SHA256]::Create()
         try {
             Require ([Convert]::ToBase64String($hash.ComputeHash($actual, 0, $bytes.Length)) -eq [Convert]::ToBase64String($hash.ComputeHash($bytes))) 'Written disk bytes differ from image'
             Require ($actual.Length -eq 16MB -and $actual[$bytes.Length] -eq 0x4a) 'Wrote beyond image length'
         } finally { $hash.Dispose() }
-        Require ([TestState]::Refreshes -eq 1) 'Completed write must refresh, even when verification fails'
+        Require ([TestState]::Refreshes -eq $(if ($isDeferred) { 2 } else { 1 })) 'Completed write must refresh, even when verification fails'
         Require ([TestState]::Reads -gt 0) 'No read-back verification'
         $events = [TestState]::Events
-        if ($Scenario -ne 'lock-failure') {
+        if ($Scenario -ne 'lock-failure' -and -not $isDeferred) {
             Require ([TestState]::Deletes -eq 0) 'Lock success used destructive fallback'
             Require ($events.IndexOf('unlock') -gt $events.LastIndexOf('read')) 'Locks released before verification completed'
         }
-        Require ($events.IndexOf('refresh') -gt $events.LastIndexOf('dispose-read')) 'Refreshed before read handle disposal'
+        Require ($events.LastIndexOf('refresh') -gt $events.LastIndexOf('dispose-read')) 'Final refresh occurred before read handle disposal'
     } else {
-        Require ([TestState]::Deletes -eq 0) 'Rejected target was modified'
+        Require ([TestState]::Deletes -eq $(if ($Scenario -eq 'deferred-body-failure') { 1 } else { 0 })) 'Unexpected layout deletion on failure'
         Require ([TestState]::Refreshes -eq 0) 'Incomplete write refreshed'
         $hash = [Security.Cryptography.SHA256]::Create()
         if ($Scenario -eq 'short-write') { [Array]::Copy($bytes, $initialDisk, (4MB - 1)) }
@@ -429,6 +504,15 @@ public static class PfVolume {
         Require ([TestState]::Writes -eq 1 -and [TestState]::Unlocks -eq 2) 'Write exception did not release both locks'
     }
     if ($Scenario -eq 'full') { Require ([TestState]::Reads -eq 3) 'Full verification missed final partial chunk' }
+    if ($Scenario -in 'deferred','deferred-final-rescan','deferred-clean-fallback') {
+        Require ([TestState]::Written -eq $bytes.Length -and $verified -eq $bytes.Length) 'Deferred mode did not copy and verify the entire image.'
+        Require ([TestState]::Deletes -eq 1) 'Deferred mode must explicitly clear layout once.'
+        $writes = @([TestState]::Events | Where-Object { $_ -like 'write-at:*' })
+        Require ($writes[0] -eq 'write-at:1048576:4194304') 'Body must start at 1 MiB, before GPT exposure.'
+        Require ($writes[-1] -eq 'write-at:0:1048576') 'Primary GPT must be the last region written.'
+        Require ([TestState]::Events.IndexOf('unlock') -gt [TestState]::Events.LastIndexOf('read')) 'New volume locks released before deferred read-back finished.'
+        if ($Scenario -eq 'deferred-clean-fallback') { Require ([TestState]::Events.Contains('diskpart-clean')) 'IOCTL-success-with-partitions did not reach the guarded clean fallback.' }
+    }
     if ($isReadOnlyScenario) {
         Require ([TestState]::Writes -eq 0 -and [TestState]::Written -eq 0) 'VerifyOnly performed writes'
         Require ([TestState]::Deletes -eq 0 -and [TestState]::Refreshes -eq 0) 'VerifyOnly deleted or refreshed the layout'

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "linux_bytes": 27917287424,
+  "usb_bytes": 31042043904,
+  "python": {
+    "name": "python-3.14.0-embed-amd64.zip",
+    "url": "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip",
+    "sha256": "8d4d3590c10449d78aa4375f534e6d5f3027d67fdc362dd1a882279db6f90fdf"
+  },
+  "base": {
+    "name": "debian-13-generic-amd64-20261001-2618.qcow2",
+    "url": "https://cloud.debian.org/images/cloud/trixie/20261001-2618/debian-13-generic-amd64-20261001-2618.qcow2",
+    "sha512": "6f0f93335bdef4ccf523c4317cc663ea52ca23b862667785f3d6d186ab4674a937385ccff0c55996b4b2e4c19e440cdf211e2a75ffa2f6548037ab43950c841d"
+  },
+  "containers": {
+    "hello_world": "docker.io/library/hello-world@sha256:d1a8d0a4eeb63aff09f5f34d4d80505e0ba81905f36158cc3970d8e07179e59e",
+    "busybox": "docker.io/library/busybox@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f"
+  }
+}

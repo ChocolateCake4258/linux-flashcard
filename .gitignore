@@ -1,32 +1,44 @@
-# --- артефакты сборки ISO ---
-*.iso
-extract/
-iso/
-newiso/
-test_mount/
-
-# --- виртуальные диски и образы ---
-*.qcow2
-*.img
-*.img.sha256
-*.sha256
-
-# --- способ B (build-all) ---
-seed.iso
-seed-src/
-qemu-installer.exe
-.autoinstall-done
-smoke-boot.log
-
-# --- QEMU (portable, скачивается вручную) ---
+# Build/download/runtime data
+LinuxFlashcard-work/
+work-*/
+builds/
+artifacts/
+dist/
+cache/
 qemu/
-
-# --- резерв исходников предыдущей версии ---
-_reserve/
-
-# --- байт-код Python (генерируется при запуске тестов) ---
-__pycache__/
-*.pyc
-
-# --- рабочие образы и журналы диагностики ---
 diagnostics*/
+
+# Disks, installers, releases and temporary output
+*.raw
+*.img
+*.vtoy
+*.qcow2
+*.vhd
+*.vhdx
+*.iso
+*.fd
+*.exe
+*.dll
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.partial
+*.log
+*.launch.lock
+
+# Python/editor environment
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.DS_Store
+
+# Private notes and old local working copies
+_reserve/
+RESTART_CONTEXT.md
+.env
+.env.*
+!.env.example

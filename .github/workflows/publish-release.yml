@@ -1,41 +1,46 @@
-# publish-release.yml — публикация собранного локально ISO в GitHub Release.
-# ВАЖНО: полная сборка ISO на бесплатном GitHub-hosted runner невозможна
-# (лимит диска ~14 ГБ против ~26 ГБ, нужных для unsquashfs+mksquashfs;
-# см. раздел «CI» в README). Поэтому сборка выполняется локально
-# (`make iso`), затем этот workflow загружает результат в релиз nightly.
-name: Publish nightly release
+name: Publish Windows download
 
 on:
-  workflow_dispatch:        # запуск вручную
-  # push: { tags: ['v*'] } # когда потребуется версионные релизы
+  push:
+    tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  checks:
+    uses: ./.github/workflows/shellcheck.yml
+
   publish:
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Проверить наличие собранного ISO
-        id: check
-        run: |
-          if [ -f custom-kubuntu.iso ]; then
-            echo "artifact=ok" >> "$GITHUB_OUTPUT"
-          else
-            echo "artifact=missing" >> "$GITHUB_OUTPUT"
-          fi
-      # Если ISO приложить нечем (сборка была не на этом runner) — ценной
-      # публикации нет; но всегда публикуем чейнджлог/инструкцию.
-
-      - name: Upload ISO to nightly release
-        if: steps.check.outputs.artifact == 'ok'
-        uses: ncipollo/release-action@v1
+      - uses: actions/setup-python@v5
         with:
-          tag: nightly
-          name: Nightly Build
-          artifacts: custom-kubuntu.iso,*.sha256
-          allowUpdates: true
-          replacesArtifacts: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          python-version: '3.14'
+      - name: Match the release tag to VERSION
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          test "${TAG#v}" = "$(tr -d '\r\n' < VERSION)"
+      - name: Build the verified Windows archive
+        env:
+          OUTPUT: ${{ runner.temp }}/release
+        run: make release OUTPUT="$OUTPUT"
+      - name: Publish archive and SHA256
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          OUTPUT: ${{ runner.temp }}/release
+        run: |
+          args=(--verify-tag --title "LinuxFlashcard ${TAG#v}" --notes-file CHANGELOG.md)
+          if [[ "$TAG" == *-rc* ]]; then args+=(--prerelease); fi
+          gh release create "$TAG" "$OUTPUT"/*-windows.zip "$OUTPUT"/*-windows.zip.sha256 "${args[@]}"

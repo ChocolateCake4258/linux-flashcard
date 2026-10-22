@@ -1,0 +1,37 @@
+LinuxFlashcard — Java / OpenJDK 21
+
+ПРОВЕРКА КОМПЛЕКТА
+Откройте терминал Ctrl+Alt+T и выполните обычным student, без sudo:
+    pf-verify-java
+Проверяются компиляция, запуск класса, сборка/повторный запуск JAR,
+отладочная информация и сохранение русского текста. Проверка создаёт
+свой временный каталог и затем удаляет только его.
+
+НОВЫЙ УЧЕБНЫЙ ПРОЕКТ
+    mkdir ~/java-lesson-1
+    cp /usr/local/share/linux-flashcard/examples/java/* ~/java-lesson-1/
+    cd ~/java-lesson-1
+Если каталог уже есть, выберите другое имя, чтобы сохранить свою работу.
+    make check
+Ожидается:
+    Java: 42
+    Привет, LinuxFlashcard!
+Появятся build/classes/Hello.class, исполняемый build/hello.jar и result.txt.
+make использует javac с UTF-8, Java 21 и отладочной информацией; загрузки из
+интернета для сборки примера не нужны.
+
+ЗАПУСК И ИЗМЕНЕНИЕ
+    java -jar build/hello.jar
+Откройте Hello.java в Mousepad, измените фразу Привет, LinuxFlashcard!
+на Моя программа Java!, сохраните и выполните:
+    make run
+make пересоберёт изменённый класс/JAR; новая фраза появится в терминале
+и result.txt. Можно проверить оба способа запуска через make check.
+
+ПОСЛЕ ВЫКЛЮЧЕНИЯ И НОВОГО ЗАПУСКА
+Штатно выключите Linux и снова откройте run-debian.bat. В терминале:
+    cd ~/java-lesson-1
+    java -jar build/hello.jar
+    make check
+Проверьте своё изменение в Hello.java, вывод JAR и содержимое result.txt.
+Исходники, JAR и результат остаются в том же записываемом QCOW2.

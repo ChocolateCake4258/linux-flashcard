@@ -1,35 +1,65 @@
-name: ShellCheck
+name: Checks
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  shellcheck:
-    name: Lint bash-скриптов
+  linux:
+    name: Source, guest scripts and packaging
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+      - uses: actions/setup-python@v5
         with:
-          severity: error
-          shellcheck_flags: -x
-          ignore_paths: _reserve
+          python-version: '3.14'
+      - name: Source contracts and Python tests
+        run: make check
+      - name: ShellCheck
+        run: make lint
+      - name: Build and verify the user download
+        env:
+          OUTPUT: ${{ runner.temp }}/linux-flashcard-release
+        run: make release OUTPUT="$OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-download
+          path: |
+            ${{ runner.temp }}/linux-flashcard-release/*-windows.zip
+            ${{ runner.temp }}/linux-flashcard-release/*-windows.zip.sha256
+          if-no-files-found: error
 
-  powershell:
-    name: Parse PowerShell (AST)
-    runs-on: ubuntu-latest
+  windows:
+    name: Windows PowerShell 5.1 file-backed regressions
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: potatoqualitee/psmodulecache@v5.5
+      - uses: actions/setup-python@v5
         with:
-          modules-to-install: PSScriptAnalyzer
-      - name: Analyze
-        shell: pwsh
+          python-version: '3.14'
+      - name: Run Windows contracts without physical disks
+        shell: powershell
         run: |
-          $errs = Invoke-ScriptAnalyzer -Path win -Recurse -Severity Error
-          if ($errs) { $errs | Format-List RuleName,ScriptName,Line,Message; exit 1 }
-          Write-Host "OK: PowerShell-скрипты без ошибок"
+          $ErrorActionPreference = 'Stop'
+          foreach ($test in @('run-tests.ps1', 'deferred-native-abi-tests.ps1', 'deferred-layout-tests.ps1', 'factory-entry-tests.ps1', 'auto-usb-tests.ps1', 'portable-backup-tests.ps1', 'file-launcher-tests.ps1', 'whpx-profile-tests.ps1')) {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path 'win/tests' $test)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          python -B tools/check-source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest discover -s win/tests -p 'test_*.py' -v
+          exit $LASTEXITCODE

@@ -1,10 +1,10 @@
 ﻿# write-image.ps1 — безопасная запись RAW-образа «два тома, одна система» на USB.
 # Требует прав администратора. Запускается ДОМА (на учебных ПК прав нет).
-# После записи том P1 (FAT32, метка FLASHCARD) появится как съёмный диск —
-# на него докладываются QEMU и кнопки (это делает build-all.ps1, стадия 9).
-# Алгоритм записи: побайтовый перенос virtual-disk.img -> \\.\PhysicalDriveN.
+# Поддерживает прежний RAW и новый NTFS/Ventoy factory image с готовым payload.
+# Побайтовый перенос образа -> \\.\PhysicalDriveN; factory проверяет тело до GPT.
 #
-# ВАЖНО: скрипт ВСЕГДА пишет лог в write-image.log рядом с образом. Раньше
+# С ResultPath отдельный лог хранится рядом с receipt, иначе — в корне проекта.
+# Раньше
 # build-all.ps1 запускал этот файл через Start-Process -Verb RunAs, и при ошибке
 # вывод уходил в отдельное окно, которое тут же закрывалось. Родительский
 # процесс видел только ненулевой код выхода, а текст ошибки пропадал.
@@ -20,7 +20,10 @@ param(
     [switch]$VerifyFull,
     [switch]$VerifyOnly,
     [switch]$AllowGptRelocation,
-    [string]$ExpectedCurrentImagePath = ''
+    [string]$ExpectedCurrentImagePath = '',
+    [switch]$DeferPartitionTable,
+    [switch]$VerifyBeforePublish,
+    [string]$ResultPath = ''
 )
 # Русский вывод в консоли: принудительно UTF-8. Иначе Windows PowerShell 5.1
 # печатает кириллицу в текущей кодовой странице как «кракозябры».
@@ -28,16 +31,16 @@ try { [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text
 
 $ErrorActionPreference = 'Stop'
 Import-Module "$PSScriptRoot\lib\pf-tools.psm1"
+. (Join-Path $PSScriptRoot 'lib\pf-deferred-write.ps1')
 
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 if (-not $ImagePath) { $ImagePath = Join-Path $RepoRoot 'virtual-disk.img' }
-$WriteLog = Join-Path $RepoRoot $(if ($VerifyOnly) { 'write-image-verify.log' } else { 'write-image.log' })
+$WriteLog = if($ResultPath){[IO.Path]::ChangeExtension([IO.Path]::GetFullPath($ResultPath),'.log')}else{Join-Path $RepoRoot $(if ($VerifyOnly) { 'write-image-verify.log' } else { 'write-image.log' })}
 
 # Лог включаем ДО любых проверок, чтобы в него попали и сообщения об ошибках.
 $LogOn = $false
 try {
-    Start-Transcript -Path $WriteLog -Force | Out-Null
-    $LogOn = $true
+    if(-not $ResultPath){Start-Transcript -Path $WriteLog -Force | Out-Null;$LogOn = $true}
 } catch {
     Write-Host "[i] Не смог включить $WriteLog : $($_.Exception.Message)" -ForegroundColor Yellow
 }
@@ -47,6 +50,35 @@ $src = $null
 $currentImage = $null
 $handle = $null
 $locks = @()
+$deferredVerified = 0L
+$writeFailure = $null
+$resultAllowed = $false
+$writerMutex = $null
+$writerMutexHeld = $false
+$validatedSourceSha256 = $null
+
+function Confirm-PfDeferredSpan {
+    param([IO.Stream]$Source,$ReadHandle,[long]$Offset,[long]$Length)
+    $blockSha=[Security.Cryptography.SHA256]::Create()
+    $expected=New-Object byte[] (4MB);$actual=New-Object byte[] (4MB)
+    $position=$Offset;$end=$Offset+$Length;$reportAt=$Offset+2GB
+    try{
+        while($position -lt $end){
+            $chunk=[int][Math]::Min([long]$expected.Length,[long]($end-$position))
+            if($chunk -ne $expected.Length){$expected=New-Object byte[] $chunk;$actual=New-Object byte[] $chunk}
+            $Source.Position=$position;$loaded=0
+            while($loaded -lt $chunk){$n=$Source.Read($expected,$loaded,$chunk-$loaded);if($n -le 0){throw 'Source EOF during deferred verification.'};$loaded+=$n}
+            $got=Read-PfRawBytes -Handle $ReadHandle -Bytes $actual -Offset $position
+            if($got -ne $chunk -or [Convert]::ToBase64String($blockSha.ComputeHash($expected)) -cne [Convert]::ToBase64String($blockSha.ComputeHash($actual))){
+                throw "Deferred read-back mismatch at byte $position (read $got of $chunk)."
+            }
+            $position+=$chunk
+            if($position -ge $reportAt -or $position -eq $end){Write-Host ('    read-back: {0:N2} / {1:N2} GiB' -f (($position-$Offset)/1GB),($Length/1GB));$reportAt=$position+2GB}
+        }
+    }finally{$blockSha.Dispose()}
+    return $Length
+}
+
 try {
     Write-Host "Лог записи: $WriteLog" -ForegroundColor DarkGray
     Write-Host "Запущен с ключами: -Yes=$Yes -DiskNumber=$DiskNumber -ImagePath=$ImagePath" -ForegroundColor DarkGray
@@ -57,6 +89,8 @@ try {
     }
     if ($AllowGptRelocation -and -not $VerifyOnly) { throw '-AllowGptRelocation is only supported with -VerifyOnly.' }
     if ($ExpectedCurrentImagePath -and $VerifyOnly) { throw '-ExpectedCurrentImagePath is only supported for writing.' }
+    if ($DeferPartitionTable -and ($VerifyOnly -or $ExpectedCurrentImagePath)) { throw '-DeferPartitionTable is an explicit layout-clearing write mode; it cannot be combined with guarded rewriting or verify-only.' }
+    if ($VerifyBeforePublish -and (-not $DeferPartitionTable -or -not $VerifyFull -or $VerifyOnly)) { throw '-VerifyBeforePublish requires -DeferPartitionTable and -VerifyFull for a new whole-disk write.' }
     if ($DiskPath) {
         if ($DiskPath -notmatch '^\\\\\.\\PhysicalDrive(\d+)$') { throw 'Invalid physical disk path.' }
         $pathNumber = [int]$Matches[1]
@@ -111,6 +145,7 @@ try {
             $null = $hash.TransformFinalBlock($hashBuffer, 0, 0)
             $actualHash = [BitConverter]::ToString($hash.Hash).Replace('-', '')
             if ($actualHash -ne $expectedHash) { throw 'RAW image SHA256 does not match. USB has not been modified.' }
+            $validatedSourceSha256=$actualHash
         } finally { $hash.Dispose() }
     }
     $src.Position = 0
@@ -154,6 +189,23 @@ try {
         throw 'USB disk changed after confirmation. Select and confirm it again.'
     }
     $disk = Assert-PfUsbDisk -Number $target.Index -Identity $identity
+    $mutexSha=[Security.Cryptography.SHA256]::Create()
+    try{$mutexKey=[BitConverter]::ToString($mutexSha.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity.Path.ToUpperInvariant()))).Replace('-','')}finally{$mutexSha.Dispose()}
+    $writerMutex=[Threading.Mutex]::new($false,('Global\LinuxFlashcard-Writer-'+$mutexKey))
+    try{$writerMutexHeld=$writerMutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$writerMutexHeld=$true}
+    if(-not $writerMutexHeld){throw 'Another writer owns this USB device.'}
+    if($VerifyBeforePublish -and $imageSize -ne $identity.Size){throw 'Deferred publication verification requires an image built for the exact target capacity.'}
+    if($ResultPath){
+        $ResultPath=[IO.Path]::GetFullPath($ResultPath)
+        $resultParent=Get-Item -LiteralPath (Split-Path ([IO.Path]::GetFullPath($ResultPath)) -Parent) -Force -ErrorAction Stop
+        for($directory=$resultParent;$directory;$directory=$directory.Parent){if($directory.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Redirected writer result directories are not supported.'}}
+        if(Test-Path -LiteralPath $ResultPath){throw 'Writer receipt already exists; use a new attempt filename.'}
+        if($resultParent.FullName -match '^([A-Za-z]):\\'){
+            if(@(Get-Partition -DriveLetter $Matches[1]|Where-Object{$_.DiskNumber -eq $target.Index}).Count){throw 'Writer result must be stored off the target USB.'}
+        }
+        $resultAllowed=$true
+        try{Start-Transcript -LiteralPath $WriteLog -NoClobber|Out-Null;$LogOn=$true}catch{Write-Host ('Cannot start writer transcript: '+$_.Exception.Message) -ForegroundColor Yellow}
+    }
     if ($currentImage -and $currentImage.Length -ne $identity.Size) { throw 'Expected current image length must equal the saved target disk size.' }
     if ($disk.LogicalSectorSize -ne 512) { throw 'This GPT image requires a USB disk with 512-byte logical sectors.' }
     $sourcePaths = @($ImagePath, $RepoRoot)
@@ -176,7 +228,7 @@ try {
     }
     Write-Host ''
     Write-Host "  Образ : $ImagePath  ($([Math]::Round($imageSize/1GB,1)) ГБ, $imageSize байт)"
-    Write-Host "  Цель  : $Drive  ($($target.Model),  $([Math]::Round($target.Size/1GB,1)) ГБ, $($target.Size) байт)"
+    Write-Host "  Цель  : $Drive  ($($target.Model),  $([Math]::Round($identity.Size/1GB,1)) ГБ, $($identity.Size) байт)"
     if ($imageSize -gt $identity.Size) {
         throw ("Образ ($imageSize байт) больше флешки ($($target.Size) байт) — не влезет.`n" +
                "Нужен носитель объёмом не меньше $([Math]::Ceiling($imageSize/1GB)) ГБ.")
@@ -216,7 +268,8 @@ try {
     $tried = 0
     $lastWhy = 'причина не установлена'
 
-    for ($pass = 1; $pass -le $MaxMode; $pass++) {
+    $firstMode = if ($DeferPartitionTable) { 2 } else { 1 }
+    for ($pass = $firstMode; $pass -le $MaxMode; $pass++) {
         $tried = $pass
         Write-Host ''
         Write-Host ("  Способ {0} из {1}: {2}" -f $pass, $MaxMode, $ModeNames[$pass-1]) -ForegroundColor Cyan
@@ -246,7 +299,8 @@ try {
             }
             2 {
                 Write-Host '    сбрасываю разметку: носитель станет нераспределённым' -ForegroundColor Yellow
-                Remove-PfDiskLayout -Number $target.Index -Identity $identity
+                if($VerifyBeforePublish){$layoutInitialization=Initialize-PfDeferredDiskLayout -Number $target.Index -Identity $identity}
+                else{Remove-PfDiskLayout -Number $target.Index -Identity $identity}
             }
         }
 
@@ -330,6 +384,94 @@ try {
         $src.Position = 0
         $hardFail = $false
         try {
+            if ($DeferPartitionTable) {
+                # Keep both GPT copies out of view until the filesystems are copied.
+                # No mounted old/new volume is allowed during the long body write.
+                $bodyEnd = $imageSize - 1MB
+                $src.Position = 1MB
+                $offset = 1MB
+                Write-Host 'Deferred GPT: copy body first, then backup GPT and primary GPT.' -ForegroundColor Cyan
+                while ($offset -lt $bodyEnd) {
+                    $bodyCount = [int][Math]::Min([long]$buf.Length, [long]($bodyEnd - $offset))
+                    $loaded = 0
+                    while ($loaded -lt $bodyCount) {
+                        $n = $src.Read($buf, $loaded, $bodyCount - $loaded)
+                        if ($n -eq 0) { throw 'Unexpected source EOF during deferred body copy.' }
+                        $loaded += $n
+                    }
+                    [PfRawDisk]::WriteAt($handle, $buf, $bodyCount, $offset)
+                    $offset += [long]$bodyCount
+                    $total += [long]$bodyCount
+                    if ($total -ge $nextReport) {
+                        Write-Host ("    {0}% - {1:N2} GiB copied (GPT still deferred)" -f [Math]::Round(100.0 * $total / $imageSize, 1), ($total / 1GB))
+                        $nextReport = $total + 2GB
+                    }
+                }
+                Flush-PfRawDisk -Handle $handle
+                if (@(Get-PfDiskPartitions -Number $target.Index).Count) { throw 'Partitions appeared before deferred GPT commit; refusing to claim a verified write.' }
+                if($VerifyBeforePublish){
+                    $null=Assert-PfUsbDisk -Number $target.Index -Identity $identity
+                    $bodyRead=$null
+                    try{
+                        $bodyRead=Open-PfRawDisk -Drive $Drive -Access Read
+                        $deferredVerified+=Confirm-PfDeferredSpan -Source $src -ReadHandle $bodyRead -Offset 1MB -Length ($bodyEnd-1MB)
+                    }finally{if($bodyRead){$bodyRead.Dispose()}}
+                    if(@(Get-PfDiskPartitions -Number $target.Index).Count){throw 'Partitions appeared during pre-publication verification.'}
+                    $null=Assert-PfUsbDisk -Number $target.Index -Identity $identity
+                    Write-Host '[OK] Filesystem body verified before GPT publication.' -ForegroundColor Green
+                }
+                foreach ($finalOffset in @([long]$bodyEnd, [long]0)) {
+                    $src.Position = $finalOffset
+                    $finalBytes = New-Object byte[] (1MB)
+                    $loaded = 0
+                    while ($loaded -lt $finalBytes.Length) {
+                        $n = $src.Read($finalBytes, $loaded, $finalBytes.Length - $loaded)
+                        if ($n -eq 0) { throw 'Unexpected source EOF in deferred GPT region.' }
+                        $loaded += $n
+                    }
+                    for ($commitAttempt = 1; $commitAttempt -le 3; $commitAttempt++) {
+                        try { [PfRawDisk]::WriteAt($handle, $finalBytes, $finalBytes.Length, $finalOffset); break }
+                        catch {
+                            $commitError = Get-PfErrorInfo $_
+                            if ($commitError.Code -ne 433 -or $commitAttempt -eq 3) { throw }
+                            # A layout rescan may invalidate the old handle. Only the
+                            # final, already staged GPT regions are idempotently retried.
+                            $handle.Dispose(); $handle = $null
+                            Start-Sleep -Seconds 1
+                            $null = Assert-PfUsbDisk -Number $target.Index -Identity $identity
+                            $handle = Open-PfRawDisk -Drive $Drive -Access 'Write'
+                        }
+                    }
+                    $total += [long]$finalBytes.Length
+                }
+                for ($flushAttempt = 1; $flushAttempt -le 3; $flushAttempt++) {
+                    try { Flush-PfRawDisk -Handle $handle; break }
+                    catch {
+                        if ((Get-PfErrorInfo $_).Code -ne 433 -or $flushAttempt -eq 3) { throw }
+                        $handle.Dispose(); $handle = $null
+                        Start-Sleep -Seconds 1
+                        $null = Assert-PfUsbDisk -Number $target.Index -Identity $identity
+                        $handle = Open-PfRawDisk -Drive $Drive -Access 'Write'
+                    }
+                }
+                $handle.Dispose(); $handle = $null
+                $null = Assert-PfUsbDisk -Number $target.Index -Identity $identity
+                if($VerifyBeforePublish){
+                    $bootRead=$null
+                    try{
+                        $bootRead=Open-PfRawDisk -Drive $Drive -Access Read
+                        $deferredVerified+=Confirm-PfDeferredSpan -Source $src -ReadHandle $bootRead -Offset 0 -Length 1MB
+                        $deferredVerified+=Confirm-PfDeferredSpan -Source $src -ReadHandle $bootRead -Offset $bodyEnd -Length 1MB
+                    }finally{if($bootRead){$bootRead.Dispose()}}
+                    if($deferredVerified -ne $imageSize){throw 'Deferred verification did not cover every image byte.'}
+                }else{
+                    Add-PfRawDiskNative
+                    [PfRawDisk]::Refresh($Drive)
+                    Start-Sleep -Seconds 1
+                    Lock-PfDiskVolumes -Number $target.Index | ForEach-Object { $locks += $_ }
+                    if (@($locks | Where-Object { -not $_.Locked }).Count) { throw 'New Windows volumes could not be locked for full read-back.' }
+                }
+            } else {
             while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
                 Write-PfRawBytes -Handle $handle -Bytes $buf -Count $n
                 $total += $n
@@ -339,9 +481,10 @@ try {
                     $nextReport = $total + 2GB
                 }
             }
+            }
             if ($total -ne $imageSize) { throw 'Source image length changed or copying was incomplete.' }
             $sw.Stop()
-            Flush-PfRawDisk -Handle $handle
+            if ($handle) { Flush-PfRawDisk -Handle $handle }
             $secs = [Math]::Max($sw.Elapsed.TotalSeconds, 0.001)
             Write-Host ("[OK] Записано {0} ГБ за {1:N0} сек ({2:N0} МБ/с)" -f `
                 [Math]::Round($total/1GB,2), $sw.Elapsed.TotalSeconds, (($total/1MB)/$secs)) -ForegroundColor Green
@@ -366,13 +509,19 @@ try {
 
     if (-not $done) {
         $advice = if ($writeCode -eq 19) { 'Носитель защищён от записи — нужна другая флешка.' }
-                  else { 'Закройте всё, что использует флешку, и повторите: build-all.bat -FromStage 8' }
+                  elseif($VerifyBeforePublish){'Закройте программы, использующие флешку, и повторите build-all.bat.'}
+                  else { 'Закройте всё, что использует флешку, и повторите: build-legacy.bat -FromStage 8' }
         throw ("Запись прервана на $([Math]::Round($total/1GB,2)) ГБ из $([Math]::Round($imageSize/1GB,2)) ГБ.`n" +
                "Причина: $lastWhy`n" +
                "Испробовано способов освободить носитель: $tried из $MaxMode.`n$advice")
     }
 
     # ---- сверка: читаем обратно начало, середину и конец образа ----
+    if($VerifyBeforePublish){
+        if($deferredVerified -ne $imageSize){throw 'Missing complete pre-publication read-back.'}
+        $verified=$deferredVerified
+        Write-Host "[OK] Verified $verified bytes: unpartitioned body plus committed boot/GPT regions." -ForegroundColor Green
+    }else{
     if ($VerifyOnly) {
         $null = Assert-PfUsbDisk -Number $target.Index -Identity $identity
         Lock-PfDiskVolumes -Number $target.Index | ForEach-Object { $locks += $_ }
@@ -466,15 +615,18 @@ try {
         $sha.Dispose()
         if ($rh) { try { $rh.Dispose() } catch { } }
     }
+    }
 
     Write-Host ''
     Write-Host '[ИНФО] Перед извлечением: безопасно отключите устройство (иконка в трее).' -ForegroundColor Yellow
     Write-Host '[ИНФО] После записи том P1 (метка FLASHCARD) станет съёмным диском.' -ForegroundColor Yellow
     if ($VerifyOnly) { Write-Host '[ГОТОВО] Проверка чтением завершена; запись образа не выполнялась.' -ForegroundColor Green }
+    elseif($VerifyBeforePublish){Write-Host '[OK] Данные и GPT проверены; Windows перечитывает разметку.' -ForegroundColor Green}
     else { Write-Host '[ГОТОВО] Образ записан и проверен. Размещение QEMU выполняет стадия 9.' -ForegroundColor Green }
-    Write-Host 'На учебном ПК без прав QEMU-кнопка недоступна — используйте нативную загрузку.' -ForegroundColor Cyan
+    if(-not $VerifyBeforePublish){Write-Host 'На учебном ПК без прав QEMU-кнопка недоступна — используйте нативную загрузку.' -ForegroundColor Cyan}
 } catch {
     $code = 1
+    $writeFailure=($_|Out-String)
     Write-Host ''
     Write-Host '================ ОШИБКА ЗАПИСИ ================' -ForegroundColor Red
     # Показываем код Windows: без него причина не видна. MethodInvocationException
@@ -516,9 +668,28 @@ try {
             Update-HostStorageCache -ErrorAction Stop
         } catch {
             $code = 1
+            $writeFailure=($_|Out-String)
             Write-Host "[!] Не удалось перечитать разметку: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
+    if($ResultPath -and $resultAllowed){
+        $record=[ordered]@{
+            Complete=($code -eq 0 -and $done);ImagePath=$ImagePath;ImageBytes=$imageSize
+            BytesWritten=[long]$total;BytesVerified=[long]$verified
+            VerificationMethod=$(if($VerifyBeforePublish){'DeferredBodyAndBootRegions'}elseif($VerifyFull){'FullReadBack'}else{'SampledReadBack'})
+            BeforePublicationBodyVerified=[bool]($VerifyBeforePublish -and $deferredVerified -eq $imageSize)
+            ExpectedSourceSha256=$validatedSourceSha256;Target=$identity;DiskNumber=$target.Index
+            LayoutInitialization=$layoutInitialization
+            Error=$writeFailure;Time=(Get-Date).ToString('o')
+        }
+        try{
+            $temporary=$ResultPath+'.new'
+            [IO.File]::WriteAllText($temporary,($record|ConvertTo-Json -Depth 4),[Text.Encoding]::UTF8)
+            if(Test-Path -LiteralPath $ResultPath){[IO.File]::Delete($ResultPath)}
+            [IO.File]::Move($temporary,$ResultPath)
+        }catch{$code=1;Write-Host ('Failed to save writer receipt: '+($_|Out-String)) -ForegroundColor Red}
+    }
+    if($writerMutex){if($writerMutexHeld){$writerMutex.ReleaseMutex()};$writerMutex.Dispose()}
     if ($LogOn) { try { Stop-Transcript | Out-Null } catch { } }
 }
 

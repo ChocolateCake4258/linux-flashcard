@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PyCharm
+Comment=Python development environment
+Exec=/usr/local/bin/pycharm %f
+Icon=/opt/linux-flashcard/pycharm/bin/pycharm.svg
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true

@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 # версия старая, значит на компьютере лежит не тот файл. Такое уже случалось
 # дважды (старый lib\pf-tools.psm1 при свежем build-all.ps1) и стоило
 # нескольких прогонов по 40 минут, поэтому версия видна сразу.
-$script:PfToolsVersion = '2026-10-01.16'
+$script:PfToolsVersion = '2026-10-10.17'
 function Get-PfToolsVersion { return $script:PfToolsVersion }
 
 # ---------------------------------------------------------------------------
@@ -614,6 +614,12 @@ public static class PfRawDisk {
             throw new IOException("WriteFile записал " + done + " из " + count + " байт");
     }
 
+    public static void WriteAt(SafeFileHandle h, byte[] buf, int count, long offset) {
+        if (!SetFilePointerEx(h, offset, IntPtr.Zero, 0))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "SetFilePointerEx (write)");
+        Write(h, buf, count);
+    }
+
     public static uint Read(SafeFileHandle h, byte[] buf, long offset) {
         if (!SetFilePointerEx(h, offset, IntPtr.Zero, 0))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "SetFilePointerEx");
@@ -1072,7 +1078,18 @@ function Remove-PfDiskLayout {
     $drive = "\\.\PhysicalDrive$Number"
     $code = [PfRawDisk]::DeleteLayout($drive)
     Write-Host "    IOCTL_DISK_DELETE_DRIVE_LAYOUT: Windows code $code"
-    if ($code -ne 0) {
+    if ($code -eq 0) {
+        $wait = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            Update-HostStorageCache -ErrorAction Stop
+            $disk = Assert-PfUsbDisk -Number $Number -Identity $Identity
+            $parts = @(Get-PfDiskPartitions -Number $Number)
+            if ($disk.NumberOfPartitions -eq 0 -and $parts.Count -eq 0) { return }
+            Start-Sleep -Seconds 1
+        } while ($wait.Elapsed.TotalSeconds -lt 15)
+        Write-Host '    IOCTL returned success but partitions remain; trying diskpart clean.'
+    }
+    & {
         $null = Assert-PfUsbDisk -Number $Number -Identity $Identity
         $tmp = [IO.Path]::GetTempFileName()
         try {
