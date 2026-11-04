@@ -4,9 +4,10 @@ $ErrorActionPreference = 'Stop'
 if (-not $LauncherDirectory) { $LauncherDirectory = Split-Path $PSScriptRoot -Parent }
 Import-Module (Join-Path $LauncherDirectory 'lib\pf-tools.psm1') -Force
 function Assert-Test($Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
-$fixture = Join-Path $env:TEMP ('pf-file ' + [guid]::NewGuid().ToString('N').Substring(0,12) + ", it's [1]")
+# Compare native argv with canonical paths even when TEMP uses an 8.3 alias.
+$fixture = [IO.Path]::GetFullPath((Join-Path $env:TEMP ('pf-file ' + [guid]::NewGuid().ToString('N').Substring(0,12) + ", it's [1]")))
 $null = New-Item -ItemType Directory -Path $fixture
-$capture = Join-Path $env:TEMP ('pf-file-capture-' + [guid]::NewGuid().ToString('N'))
+$capture = [IO.Path]::GetFullPath((Join-Path $env:TEMP ('pf-file-capture-' + [guid]::NewGuid().ToString('N'))))
 $null = New-Item -ItemType Directory -Path $capture
 $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 try {
