@@ -5,7 +5,8 @@ $win=Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $win 'lib\pf-tools.psm1') -Force -WarningAction SilentlyContinue
 . (Join-Path $win 'factory\usb.ps1')
 . (Join-Path $win 'lib\pf-storage.ps1')
-$root=Join-Path $env:TEMP ('pf-auto-usb-'+[guid]::NewGuid().ToString('N'))
+# The coordinator returns canonical paths; TEMP may contain an 8.3 user alias.
+$root=[IO.Path]::GetFullPath((Join-Path $env:TEMP ('pf-auto-usb-'+[guid]::NewGuid().ToString('N'))))
 $null=[IO.Directory]::CreateDirectory($root)
 $passed=0
 function Require($Condition,[string]$Message){if(-not $Condition){throw $Message}}
