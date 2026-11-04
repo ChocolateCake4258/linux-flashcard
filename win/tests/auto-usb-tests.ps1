@@ -34,7 +34,8 @@ try{
         $candidate=Resolve-PfPreparationWorkspace -Source (Split-Path $win -Parent) -Target $global:AutoDisk -SettingsPath $settings -RequiredBytes 100GB
         Require ($candidate -like '*\builds\build-*' -and -not (Test-Path -LiteralPath $candidate)) 'Default workspace was created during selection'
         Write-PfPreparationJson $settings @{Schema=1;Workspace=(Join-Path $root 'remembered');MediaBytes=$global:AutoDisk.Size}
-        Require ((Resolve-PfPreparationWorkspace -Source (Split-Path $win -Parent) -Target $global:AutoDisk -SettingsPath $settings -RequiredBytes 100GB) -eq (Join-Path $root 'remembered')) 'Previous workspace was not selected'
+        $remembered=Resolve-PfPreparationWorkspace -Source (Split-Path $win -Parent) -Target $global:AutoDisk -SettingsPath $settings -RequiredBytes 100GB
+        Require ($remembered -eq (Join-Path $root 'remembered')) ('Previous workspace was not selected: '+($remembered|ConvertTo-Json -Compress))
         $fresh=Resolve-PfPreparationWorkspace -Source (Split-Path $win -Parent) -Target $global:AutoDisk -SettingsPath $settings -RequiredBytes 100GB -NewBuild
         Require ($fresh -ne (Join-Path $root 'remembered') -and -not (Test-Path -LiteralPath $fresh)) 'NewBuild reused the remembered workspace'
     }
@@ -46,6 +47,31 @@ try{
             Require $caught 'Unowned/source workspace was accepted'
         }
         Require ([IO.File]::ReadAllText((Join-Path $foreign 'keep.txt')) -eq 'user data') 'Foreign contents changed'
+    }
+    Case 'Package upgrade cannot select or rewrite a completed old source snapshot' {
+        $recipe=Join-Path $root 'recipe';$old=Join-Path $root 'old-version';$null=[IO.Directory]::CreateDirectory($recipe)
+        $file=Join-Path $recipe 'recipe.txt';[IO.File]::WriteAllText($file,'old source')
+        $hash='a'*64;$snapshot=Join-Path $old ('sources\'+$hash);$null=[IO.Directory]::CreateDirectory($snapshot)
+        [IO.File]::Copy($file,(Join-Path $snapshot 'recipe.txt'),$false)
+        Write-PfPreparationJson (Join-Path $snapshot 'factory-source-manifest.json') @{'recipe.txt'=(Get-FileHash -LiteralPath $file).Hash}
+        Write-PfPreparationJson (Join-Path $old 'factory-state.json') @{schema=1;workspace=$old;source_hash=$hash;stages=@{finalize=@{complete=$true}}}
+        $pointer=Join-Path $root 'old-version-pointer.json';Write-PfPreparationJson $pointer @{Schema=1;Workspace=$old;MediaBytes=$global:AutoDisk.Size}
+        Require (Test-PfPreparationSourceMatch $old $recipe) 'Unchanged package did not match its snapshot'
+        Require ((Resolve-PfPreparationWorkspace -Source $recipe -Target $global:AutoDisk -SettingsPath $pointer -RequiredBytes 100GB) -eq $old) 'Matching completed build was not selected'
+        [IO.File]::WriteAllText($file,'new source')
+        Require (-not(Test-PfPreparationSourceMatch $old $recipe)) 'Changed package was treated as original source'
+        $fresh=Resolve-PfPreparationWorkspace -Source $recipe -Target $global:AutoDisk -SettingsPath $pointer -RequiredBytes 100GB
+        Require ($fresh -ne $old -and -not(Test-Path -LiteralPath $fresh)) 'Upgrade reused or created an old workspace before confirmation'
+        $failed=$false;try{Resolve-PfPreparationWorkspace -Requested $old -Source $recipe -Target $global:AutoDisk -SettingsPath $pointer -RequiredBytes 100GB|Out-Null}catch{$failed=$_.Exception.Message -match 'NewBuild'}
+        Require $failed 'Explicit old workspace was accepted with a new package'
+        Require (Test-PfPreparationSourceMatch $old $snapshot) 'Original frozen source can no longer use its build'
+        Require ([IO.File]::ReadAllText((Join-Path $snapshot 'recipe.txt')) -eq 'old source') 'Upgrade changed the frozen snapshot'
+    }
+    Case 'Invalid saved source identity fails before writer selection' {
+        $bad=Join-Path $root 'bad-source';$null=[IO.Directory]::CreateDirectory($bad)
+        Write-PfPreparationJson (Join-Path $bad 'factory-state.json') @{schema=1;workspace=$bad;source_hash='../outside'}
+        $failed=$false;try{Test-PfPreparationSourceMatch $bad (Split-Path $win -Parent)|Out-Null}catch{$failed=$true}
+        Require $failed 'Invalid source identity was accepted'
     }
     Case 'Real subprocess boundary preserves spaces, apostrophes and Unicode' {
         $quoted=Join-Path $root "quoted path's test.ps1";$output=Join-Path $root 'child-result.json'
@@ -87,7 +113,10 @@ try{
         if((Split-Path $Path -Leaf) -eq 'build-debian.ps1'){
             Require ($Parameters.UsbBytes -eq $global:AutoDisk.Size -and -not $Parameters.WriteUsb) 'Factory did not receive target size or selected USB itself'
             $ws=$Parameters.Workspace;$out=Join-Path $ws 'artifacts';$null=[IO.Directory]::CreateDirectory($out)
-            Write-PfPreparationJson (Join-Path $ws 'factory-state.json') @{schema=1;workspace=$ws;build_id='test-build';stages=@{}}
+            $sourceHash='b'*64;$snapshot=Join-Path $ws ('sources\'+$sourceHash);$null=[IO.Directory]::CreateDirectory($snapshot)
+            $readme=Join-Path (Split-Path $win -Parent) 'README.md';[IO.File]::Copy($readme,(Join-Path $snapshot 'README.md'),$true)
+            Write-PfPreparationJson (Join-Path $snapshot 'factory-source-manifest.json') @{'README.md'=(Get-FileHash -LiteralPath $readme).Hash}
+            Write-PfPreparationJson (Join-Path $ws 'factory-state.json') @{schema=1;workspace=$ws;build_id='test-build';source_hash=$sourceHash;stages=@{}}
             if($global:BackendFailure -eq 'factory'){throw 'Injected factory failure'}
             $image=Join-Path $out 'linux-flashcard-usb.img';$stream=[IO.File]::Create($image)
             try{$stream.SetLength($global:AutoDisk.Size)}finally{$stream.Dispose()}

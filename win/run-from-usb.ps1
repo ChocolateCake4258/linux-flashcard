@@ -7,8 +7,8 @@ param(
     [ValidateSet('qcow2','raw')][string]$DiskFormat = 'qcow2',
     [ValidateSet('utc','localtime')][string]$RtcBase = 'utc',
     [ValidateSet('TCG','WHPX')][string]$Accel = 'TCG',
-    $RamMb = 4096,
-    $Cores = 2,
+    $RamMb = 0,
+    $Cores = 0,
     [switch]$Snapshot,
     [switch]$NoPause,
     [string]$LogRoot = ''
@@ -31,6 +31,13 @@ $started = (Get-Date).ToString('o')
 $elevated = $null
 $whpxStatus = $null
 $qemuAliasPaths = [Collections.Generic.List[string]]::new()
+
+function Get-DefaultDiskCandidates {
+    param([string]$Directory)
+    Join-Path $Directory 'virtual-disk.qcow2'
+    $parent=Split-Path $Directory -Parent
+    if($parent){Join-Path $parent 'virtual-disk.qcow2'}
+}
 
 function Assert-WritableFile {
     param([string]$Path)
@@ -137,11 +144,11 @@ try {
 
     $stage = 'resolve-image'
     if (-not $DiskPath) {
-        foreach ($candidate in @((Join-Path $PSScriptRoot 'virtual-disk.qcow2'), (Join-Path (Split-Path $PSScriptRoot -Parent) 'virtual-disk.qcow2'))) {
+        foreach ($candidate in @(Get-DefaultDiskCandidates -Directory $PSScriptRoot)) {
             if (Test-Path -LiteralPath $candidate -PathType Leaf) { $DiskPath = $candidate; break }
         }
     }
-    if (-not $DiskPath) { throw 'Образ не найден. Укажите -DiskPath или положите virtual-disk.qcow2 рядом с запускателем.' }
+    if (-not $DiskPath) { throw 'Образ не найден. Для готовой флешки запустите run-linux.bat или run-linux-accelerated.bat. Общий запуск требует -DiskPath и правильного -DiskFormat либо соседнего virtual-disk.qcow2.' }
     $image = Get-Item -LiteralPath $DiskPath -ErrorAction Stop
     $extensions = if ($DiskFormat -eq 'qcow2') { @('.qcow2') } else { @('.raw','.img','.vtoy') }
     if ($image.PSIsContainer -or $image.PSProvider.Name -ne 'FileSystem' -or $image.FullName -notmatch '^[A-Za-z]:\\' -or $image.Extension -notin $extensions) {
@@ -213,10 +220,8 @@ try {
     if ($DiskFormat -eq 'qcow2' -and ($info.'dirty-flag' -or $info.'format-specific'.data.corrupt)) { throw 'QCOW2 отмечен как некорректно закрытый или повреждённый. Автоматический ремонт не выполняется.' }
 
     $stage = 'prepare-profile'
-    if ($Accel -eq 'WHPX') {
-        if (-not $PSBoundParameters.ContainsKey('RamMb')) { $RamMb = 0 }
-        if (-not $PSBoundParameters.ContainsKey('Cores')) { $Cores = 0 }
-    }
+    # Defaults are selected here, never prepended by a BAT shortcut: explicit
+    # -RamMb/-Cores must reach PowerShell's parameter binder exactly once.
     $RamMb = [int]$RamMb
     $Cores = [int]$Cores
     $hostInfo = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
@@ -224,16 +229,20 @@ try {
     $totalMb = [Math]::Floor($hostInfo.TotalPhysicalMemory / 1MB)
     $logical = [int]$hostInfo.NumberOfLogicalProcessors
     if ($logical -lt 1) { throw 'Не удалось определить число CPU компьютера.' }
-    if ($RamMb -eq 0) {
-        $limit = if ($Accel -eq 'WHPX') { [Math]::Min(6144, [Math]::Floor($totalMb / 2 / 1024) * 1024) } else { 4096 }
-        $RamMb = [int][Math]::Min($limit, [Math]::Floor(($freeMb - 2048) / 1024) * 1024)
-    }
+    $minimumRamMb = 320
+    $windowsReserveMb = 2048
+    $autoRam = $RamMb -eq 0
+    # Use every whole MiB in the current budget, including sub-GiB profiles.
+    # The reserve also leaves room for QEMU's own allocations outside guest RAM.
+    $ramBudgetMb = [int][Math]::Min(($freeMb - $windowsReserveMb), ($totalMb - $windowsReserveMb))
+    if ($autoRam) { $RamMb = $ramBudgetMb }
     if ($Cores -eq 0) {
         $Cores = if ($Accel -eq 'WHPX') { [Math]::Min(4, [Math]::Max(1, [Math]::Floor($logical / 2))) } else { [Math]::Min(2, $logical) }
     }
     if ($Cores -lt 1 -or $Cores -gt $logical) { throw "Число CPU должно быть от 1 до $logical (0 = авто)." }
-    if ($RamMb -lt 2048 -or $RamMb -gt ($totalMb - 2048) -or $freeMb -lt ($RamMb + 2048)) {
-        throw "Недостаточно памяти: Linux нужно $RamMb МБ и ещё 2048 МБ для Windows; сейчас свободно $freeMb МБ. Закройте лишние приложения и повторите запуск."
+    if ($RamMb -lt $minimumRamMb -or $RamMb -gt $ramBudgetMb) {
+        $requiredRamMb=[Math]::Max($minimumRamMb,$RamMb)
+        throw "Недостаточно памяти: Linux нужно минимум $requiredRamMb МБ и ещё $windowsReserveMb МБ резерва Windows/QEMU; сейчас свободно $freeMb МБ. Закройте лишние приложения и повторите запуск."
     }
 
     $stage = 'prepare-persistent-uefi'
@@ -278,6 +287,8 @@ try {
     $profile = [ordered]@{ Started = $started; DiskPath = $DiskPath; ImageFormat = $DiskFormat; RtcBase = $RtcBase; Qemu = $qemu; UefiCode = $firmware; UefiVars = $varsPath; Accel = $Accel; CpuModel = 'Westmere'; WhpxStatus = $whpxStatus; RamMb = $RamMb; Cores = $Cores; Video = 'VGA 1024x768 60Hz'; Elevated = $elevated; Snapshot = $false; QmpPort = $qmpPort }
     $profile.QemuWorkingDirectory=$qemuWorkingDirectory;$profile.QemuFilePaths=$qemuPaths
     $profile.StorageDevice='virtio-blk-pci,drive=pfroot,addr=0x4,bootindex=1';$profile.NetworkPciAddress='0x3'
+    $profile.RamSelection=if($autoRam){'Auto'}else{'Explicit'}
+    $profile.RamBudgetMb=$ramBudgetMb;$profile.MinimumRamMb=$minimumRamMb;$profile.WindowsReserveMb=$windowsReserveMb
     [IO.File]::WriteAllText((Join-Path $logDirectory 'launch-profile.json'), ($profile | ConvertTo-Json), [Text.Encoding]::UTF8)
     Write-PfHeader "Linux из файла: постоянная запись, $Accel, UEFI"
     Write-Host "Образ: $DiskPath"

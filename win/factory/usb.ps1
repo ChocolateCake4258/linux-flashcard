@@ -62,13 +62,39 @@ function Assert-PfPreparationWorkspace {
     return $full
 }
 
+function Test-PfPreparationSourceMatch {
+    param([string]$Workspace,[string]$Source)
+    $statePath=Join-Path $Workspace 'factory-state.json'
+    if(-not(Test-Path -LiteralPath $statePath -PathType Leaf)){return $true}
+    $state=Get-Content -LiteralPath $statePath -Raw -Encoding UTF8|ConvertFrom-Json
+    if($state.schema -ne 1 -or $state.workspace -ine ([IO.Path]::GetFullPath($Workspace).TrimEnd('\')) -or $state.source_hash -notmatch '^[a-fA-F0-9]{64}$'){
+        throw 'Cannot verify the source identity of the saved factory workspace.'
+    }
+    $snapshot=Join-Path $Workspace ('sources\'+$state.source_hash)
+    $manifest=Get-Content -LiteralPath (Join-Path $snapshot 'factory-source-manifest.json') -Raw -Encoding UTF8|ConvertFrom-Json
+    $entries=@($manifest.PSObject.Properties)
+    if(-not $entries.Count){throw 'The saved source snapshot manifest is empty.'}
+    foreach($entry in $entries){
+        if($entry.Name -match '(^|/)\.\.?(/|$)|^[\\/]|:|\\' -or [string]$entry.Value -notmatch '^[a-fA-F0-9]{64}$'){
+            throw 'Unsafe or invalid saved source snapshot entry.'
+        }
+        $file=Join-Path $Source $entry.Name
+        if(-not(Test-Path -LiteralPath $file -PathType Leaf)){return $false}
+        if((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine [string]$entry.Value){return $false}
+    }
+    return $true
+}
+
 function Resolve-PfPreparationWorkspace {
     param([string]$Requested,[string]$Source,$Target,[string]$SettingsPath,[switch]$NewBuild,[long]$RequiredBytes)
     if($Requested -and $NewBuild){throw '-NewBuild selects a new automatic workspace; do not combine it with -Workspace.'}
     if(-not $Requested -and -not $NewBuild -and (Test-Path -LiteralPath $SettingsPath)){
         $last=Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8|ConvertFrom-Json
         if($last.Schema -ne 1){throw 'Unsupported automatic preparation settings.'}
-        if([long]$last.MediaBytes -eq $Target.Size){$Requested=[string]$last.Workspace}
+        if([long]$last.MediaBytes -eq $Target.Size){
+            if(Test-PfPreparationSourceMatch ([string]$last.Workspace) $Source){$Requested=[string]$last.Workspace}
+            else{Write-Host 'Сохранённая сборка создана другой версией исходников. Для текущего пакета будет создана новая сборка; прежний образ сохранён.' -ForegroundColor Yellow}
+        }
     }
     if(-not $Requested){
         $storage=Split-Path $SettingsPath -Parent
@@ -76,7 +102,11 @@ function Resolve-PfPreparationWorkspace {
         if($volume.DriveType -ne 'Fixed' -or $volume.FileSystem -ne 'NTFS' -or $volume.SizeRemaining -lt $RequiredBytes){throw ('The selected storage volume requires {0:N1} GiB free. Move the extracted package to another NTFS volume or specify -Workspace.' -f ($RequiredBytes/1GB))}
         $Requested=Join-Path $storage ('builds\build-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
     }
-    return Assert-PfPreparationWorkspace $Requested $Source $Target.Number
+    $full=Assert-PfPreparationWorkspace $Requested $Source $Target.Number
+    if(-not(Test-PfPreparationSourceMatch $full $Source)){
+        throw 'Выбранный workspace содержит сборку другой версии. Для актуальной системы запустите START.bat -NewBuild. Старую сборку можно продолжать её исходным пакетом.'
+    }
+    return $full
 }
 
 function Find-PfPreparationTarget {

@@ -11,7 +11,9 @@ $null = New-Item -ItemType Directory -Path $capture
 $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 try {
     foreach ($name in @('run-from-usb.ps1','run-from-usb.bat')) { Copy-Item -LiteralPath (Join-Path $LauncherDirectory $name) -Destination (Join-Path $fixture $name) }
-    Copy-Item -LiteralPath (Join-Path $LauncherDirectory 'full-suite\run-linux-accelerated.bat') -Destination (Join-Path $fixture 'run-linux-accelerated.bat')
+    foreach($name in @('run-linux.bat','run-linux-accelerated.bat')){
+        Copy-Item -LiteralPath (Join-Path $LauncherDirectory ('full-suite\'+$name)) -Destination (Join-Path $fixture $name)
+    }
     $tokens = $null; $errors = $null
     $null = [Management.Automation.Language.Parser]::ParseFile((Join-Path $fixture 'run-from-usb.ps1'), [ref]$tokens, [ref]$errors)
     Assert-Test ($errors.Count -eq 0) 'Launcher parse failed.'
@@ -32,7 +34,9 @@ function Get-CimInstance {
     switch($ClassName){
         'Win32_ComputerSystem' { [pscustomobject]@{TotalPhysicalMemory=16GB;NumberOfLogicalProcessors=8} }
         'Win32_OperatingSystem' {
-            $free=if([IO.File]::Exists((Join-Path $PSScriptRoot 'low-memory.flag'))){512MB}else{8GB}
+            $free=if([IO.File]::Exists((Join-Path $PSScriptRoot 'low-memory.flag'))){512MB}
+                elseif([IO.File]::Exists((Join-Path $PSScriptRoot 'small-memory.flag'))){2429MB}
+                elseif([IO.File]::Exists((Join-Path $PSScriptRoot 'reduced-memory.flag'))){5000MB}else{8GB}
             [pscustomobject]@{FreePhysicalMemory=($free/1KB)}
         }
         default { throw ('Unexpected fixture CIM query: '+$ClassName) }
@@ -43,7 +47,7 @@ function Get-CimInstance {
     [IO.File]::WriteAllText($launcher,$text.Insert($ast.ParamBlock.Extent.EndOffset,$resources),[Text.Encoding]::UTF8)
 
     $script:caseIndex=0
-    function Invoke-FailureCase([string]$Name, [string[]]$Arguments, [int]$ExpectedExit, [string]$ExpectedStage, [switch]$Batch, [switch]$Accelerated) {
+    function Invoke-FailureCase([string]$Name, [string[]]$Arguments, [int]$ExpectedExit, [string]$ExpectedStage, [switch]$Batch, [switch]$Accelerated, [switch]$Standard) {
         # CodeDom/Add-Type also uses the nested launcher TEMP. Keep private
         # fixture paths below Win32 MAX_PATH while retaining special characters.
         $script:caseIndex++
@@ -52,7 +56,7 @@ function Get-CimInstance {
         $stdout = Join-Path $capture ($Name + '-stdout.log')
         $stderr = Join-Path $capture ($Name + '-stderr.log')
         if ($Batch) {
-            $batchName = if ($Accelerated) { 'run-linux-accelerated.bat' } else { 'run-from-usb.bat' }
+            $batchName = if ($Accelerated) { 'run-linux-accelerated.bat' } elseif($Standard) { 'run-linux.bat' } else { 'run-from-usb.bat' }
             $command = (ConvertTo-PfArgumentList -Arguments (@((Join-Path $fixture $batchName)) + $arguments)) -join ' '
             $process = Start-Process -FilePath $env:ComSpec -ArgumentList ('/d /s /c "' + $command + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         } else {
@@ -166,16 +170,49 @@ public static class FileLauncherStub {
     Assert-Test ($argv -contains '-rtc' -and $argv -contains 'base=localtime') 'Shared-image RTC base was not forwarded.'
     Assert-Test ((Get-FileHash -LiteralPath $raw).Hash -eq $rawHash) 'RAW native failure changed its image.'
     Assert-Test ($argv -contains 'PF_DISK_BYTES:01-02-03-04') 'Native child did not read the actual RAW source bytes.'
+
+    # Exercise the actual ordinary BAT, not just the shared PowerShell entry.
+    # The old shortcut duplicated -RamMb/-Cores before PowerShell could log it.
+    $shortcutImage=Join-Path $fixture 'linux.img.vtoy'
+    [IO.File]::WriteAllBytes($shortcutImage,[byte[]](1,2,3,4))
+    $shortcutHash=(Get-FileHash -LiteralPath $shortcutImage).Hash
+    $shortcutLogs=Invoke-FailureCase 'tcg-shortcut-resource-overrides' @('-RamMb','2048','-Cores','1') 42 'start-qemu' -Batch -Standard
+    $shortcutProfile=[IO.File]::ReadAllText((Join-Path $shortcutLogs 'launch-profile.json'))|ConvertFrom-Json
+    $shortcutArgv=[IO.File]::ReadAllLines((Join-Path $shortcutLogs 'qemu-stdout.log'))
+    Assert-Test ($shortcutProfile.RamMb -eq 2048 -and $shortcutProfile.Cores -eq 1 -and $shortcutProfile.ImageFormat -eq 'raw' -and $shortcutProfile.RtcBase -eq 'localtime') 'Ordinary BAT lost explicit RAM/CPU or shared-image settings.'
+    Assert-Test ($shortcutProfile.Accel -eq 'TCG' -and $shortcutArgv -contains '2048M' -and @($shortcutArgv|Where-Object{$_ -eq '-m'}).Count -eq 1 -and -not($shortcutArgv -match 'whpx|PhysicalDrive|^-snapshot$')) 'Ordinary BAT did not select one persistent TCG memory profile.'
+    $shortcutLogs=Invoke-FailureCase 'tcg-shortcut-auto-defaults' @() 42 'start-qemu' -Batch -Standard
+    $shortcutProfile=[IO.File]::ReadAllText((Join-Path $shortcutLogs 'launch-profile.json'))|ConvertFrom-Json
+    Assert-Test ($shortcutProfile.RamMb -eq 6144 -and $shortcutProfile.Cores -eq 2 -and $shortcutProfile.RamBudgetMb -eq 6144 -and $shortcutProfile.RamSelection -eq 'Auto') 'Ordinary BAT did not use the maximum available TCG RAM budget.'
+    $reducedMemory=Join-Path $fixture 'reduced-memory.flag';[IO.File]::WriteAllText($reducedMemory,'test')
+    $shortcutLogs=Invoke-FailureCase 'tcg-shortcut-auto-reduced-memory' @() 42 'start-qemu' -Batch -Standard
+    $shortcutProfile=[IO.File]::ReadAllText((Join-Path $shortcutLogs 'launch-profile.json'))|ConvertFrom-Json
+    Assert-Test ($shortcutProfile.RamMb -eq 2952 -and $shortcutProfile.Cores -eq 2) 'Ordinary BAT wasted part of the available RAM budget.'
+    Remove-Item -LiteralPath $reducedMemory
+    $smallMemory=Join-Path $fixture 'small-memory.flag';[IO.File]::WriteAllText($smallMemory,'test')
+    $shortcutLogs=Invoke-FailureCase 'tcg-shortcut-sub-gib-auto' @() 42 'start-qemu' -Batch -Standard
+    $shortcutProfile=[IO.File]::ReadAllText((Join-Path $shortcutLogs 'launch-profile.json'))|ConvertFrom-Json
+    $shortcutArgv=[IO.File]::ReadAllLines((Join-Path $shortcutLogs 'qemu-stdout.log'))
+    Assert-Test ($shortcutProfile.RamMb -eq 381 -and $shortcutProfile.RamBudgetMb -eq 381 -and $shortcutProfile.MinimumRamMb -eq 320 -and $shortcutProfile.WindowsReserveMb -eq 2048 -and $shortcutArgv -contains '381M') 'Small-memory automatic RAM did not reach native QEMU intact.'
+    $shortcutLogs=Invoke-FailureCase 'tcg-shortcut-explicit-minimum' @('-RamMb','320','-Cores','1') 42 'start-qemu' -Batch -Standard
+    $shortcutProfile=[IO.File]::ReadAllText((Join-Path $shortcutLogs 'launch-profile.json'))|ConvertFrom-Json
+    Assert-Test ($shortcutProfile.RamMb -eq 320 -and $shortcutProfile.RamSelection -eq 'Explicit' -and $shortcutProfile.Cores -eq 1) 'A manual tested low-memory profile was replaced by auto RAM.'
+    $null=Invoke-FailureCase 'tcg-shortcut-sub-minimum-rejected' @('-RamMb','319') 1 'prepare-profile' -Batch -Standard
+    Remove-Item -LiteralPath $smallMemory
+    Assert-Test ((Get-FileHash -LiteralPath $shortcutImage).Hash -eq $shortcutHash) 'Ordinary shortcut tests changed their image.'
+
     $lowMemory=Join-Path $fixture 'low-memory.flag';[IO.File]::WriteAllText($lowMemory,'test')
     $null=Invoke-FailureCase 'memory-reserve-rejected' @('-DiskPath',$raw,'-DiskFormat','raw','-QemuExe',$stub,'-RamMb','2048','-Cores','1') 1 'prepare-profile'
+    $autoLogs=Invoke-FailureCase 'auto-memory-reports-real-minimum' @('-DiskPath',$raw,'-DiskFormat','raw','-QemuExe',$stub,'-RamMb','0','-Cores','1') 1 'prepare-profile'
+    $autoResult=[IO.File]::ReadAllText((Join-Path $autoLogs 'launcher-result.json'))|ConvertFrom-Json
+    Assert-Test ($autoResult.Error -match 'минимум 320 МБ') 'Low-memory auto profile reported a zero/negative or obsolete guest requirement.'
+    $null=Invoke-FailureCase 'tcg-shortcut-memory-reserve-rejected' @('-RamMb','2048','-Cores','1') 1 'prepare-profile' -Batch -Standard
     Remove-Item -LiteralPath $lowMemory
     $profile = [IO.File]::ReadAllText((Join-Path $logs 'launch-profile.json')) | ConvertFrom-Json
     Assert-Test ($profile.ImageFormat -eq 'raw' -and $profile.RtcBase -eq 'localtime' -and -not $profile.Snapshot) 'RAW profile metadata is incorrect.'
     . (Join-Path $LauncherDirectory 'lib\pf-whpx.ps1')
     $status=Get-PfWhpxStatus
     if($status.Available){
-        $shortcutImage=Join-Path $fixture 'linux.img.vtoy'
-        [IO.File]::WriteAllBytes($shortcutImage,[byte[]](1,2,3,4))
         $hash=(Get-FileHash -LiteralPath $shortcutImage).Hash
         $logs=Invoke-FailureCase 'whpx-shortcut-native-exit' @('-RamMb','2048','-Cores','1') 42 'start-qemu' -Batch -Accelerated
         $argv=[IO.File]::ReadAllLines((Join-Path $logs 'qemu-stdout.log'))

@@ -10,6 +10,9 @@ x86-64 UEFI/Ventoy/vtoyboot и файловый QEMU открывают одну
 Windows-запуск обычным пользователем: TCG либо явно выбранный WHPX; постоянный
 VARS и launch.lock общие. Root PCI4/net PCI3 и bootindex совпадают с фабрикой.
 Профиль видео — VGA 1024×768/60, GTK gl=off; RTC localtime.
+Consumer auto RAM использует максимум текущей free RAM минус 2048 МиБ резерва
+Windows/QEMU, с точностью до МиБ; нижняя граница — 320 МиБ. Установочная фабрика
+имеет отдельный профиль ресурсов: низкопамятный consumer не меняет её prerequisites.
 
 ## Автоматическая подготовка
 
