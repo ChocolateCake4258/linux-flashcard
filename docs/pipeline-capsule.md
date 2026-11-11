@@ -12,7 +12,7 @@
 с подготовленной Linux-системой и закреплёнными компонентами для повторной
 сборки без скачивания пакетов.
 
-На 11 ноября 2026 года в [релизе RC10](https://github.com/ChocolateCake4258/linux-flashcard/releases/tag/v2026.10.25-rc10)
+На 11 ноября 2026 года в [релизе RC11](https://github.com/ChocolateCake4258/linux-flashcard/releases/tag/v2026.11.11-rc11)
 этот архив не опубликован. Доступный `*-windows.zip` подготавливает систему
 с первоначальным скачиванием компонентов; инструкция приведена в
 [README, раздел «Скачивание»](https://github.com/ChocolateCake4258/linux-flashcard/blob/main/README.md#скачивание).

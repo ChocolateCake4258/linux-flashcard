@@ -8,9 +8,9 @@ IDE, базы данных и офисные приложения. Одна ус
 
 ## Скачивание
 
-**[Скачать Windows-пакет — linux-flashcard-2026.10.25-rc10-windows.zip](https://github.com/ChocolateCake4258/linux-flashcard/releases/download/v2026.10.25-rc10/linux-flashcard-2026.10.25-rc10-windows.zip)**
+**[Скачать Windows-пакет — linux-flashcard-2026.11.11-rc11-windows.zip](https://github.com/ChocolateCake4258/linux-flashcard/releases/download/v2026.11.11-rc11/linux-flashcard-2026.11.11-rc11-windows.zip)**
 
-Текущий пользовательский выпуск — **[2026.10.25-rc10](https://github.com/ChocolateCake4258/linux-flashcard/releases/tag/v2026.10.25-rc10)**,
+Текущий пользовательский выпуск — **[2026.11.11-rc11](https://github.com/ChocolateCake4258/linux-flashcard/releases/tag/v2026.11.11-rc11)**,
 предварительная версия на базе Debian 13/XFCE. Windows-пакет содержит средства
 автоматической подготовки флешки и проверочный `RELEASE-MANIFEST.json`.
 
@@ -118,7 +118,7 @@ WHPX: [docs/accelerated-mode.md](docs/accelerated-mode.md).
 Резервные копии: [docs/backup-recovery.md](docs/backup-recovery.md).
 
 Для автономного повторения сборки предусмотрен отдельный архив с подготовленной
-заводской основой и закреплёнными компонентами. В RC10 он не опубликован.
+заводской основой и закреплёнными компонентами. В RC11 он не опубликован.
 Использование готового комплекта описано в [docs/pipeline-capsule.md](docs/pipeline-capsule.md).
 
 ## Разработка и лицензия
