@@ -117,8 +117,9 @@ Windows/QEMU**, с точностью до одного МиБ и без пре�
 WHPX: [docs/accelerated-mode.md](docs/accelerated-mode.md).
 Резервные копии: [docs/backup-recovery.md](docs/backup-recovery.md).
 
-Сохранение самого конвейера с закреплённой заводской основой и автономной кнопкой
-повторной сборки: [docs/pipeline-capsule.md](docs/pipeline-capsule.md).
+Для автономного повторения сборки предусмотрен отдельный архив с подготовленной
+заводской основой и закреплёнными компонентами. В RC10 он не опубликован.
+Использование готового комплекта описано в [docs/pipeline-capsule.md](docs/pipeline-capsule.md).
 
 ## Разработка и лицензия
 
